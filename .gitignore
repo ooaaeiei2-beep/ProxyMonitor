@@ -1,0 +1,17 @@
+# ---- Xcode / Apple ----
+DerivedData/
+build/
+*.xcuserdata/
+*.xcuserdatad/
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# 旧的、已废弃的生成工程（已被 ProxyMonitor.xcodeproj 取代）
+ProxyTrafficMonitor.xcodeproj/
+
+# ---- macOS ----
+.DS_Store
+
+# ---- 构建产物（永不提交 .app）----
+*.app/
+*.dSYM/
