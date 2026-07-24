@@ -91,8 +91,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             PTMLogger.error("statusItem.button 为 nil")
             return
         }
-        button.image = templateImage("speedometer")
-        button.title = " PTM"   // 始终显示文字标识，确保按钮可见
+        button.image = templateImage("network")
+        setStatusTitle("PTM")   // 始终显示文字标识，确保按钮可见
         PTMLogger.info("状态栏按钮已配置")
     }
 
@@ -102,7 +102,20 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return img
     }
 
-    /// 状态栏仅显示百分比；出错时图标切到警告态（不带实时刷新动画，刷新完成自然显示新百分比）。
+    /// 设置状态栏按钮文字：等宽数字字体（monospacedDigitSystemFont）确保百分比变化时
+    /// 菜单栏项宽度恒定、不左右跳动；前景色固定 `.labelColor`（系统默认、无色，自适应深浅），
+    /// 严守「状态栏文字无色」铁律。仅设字体，不改颜色。
+    private func setStatusTitle(_ string: String) {
+        guard let button = statusItem.button else { return }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+            .expansion: -0.2 as CGFloat   // 横向字距压缩：状态栏项更窄（−10%），字重/字号/字形不变
+        ]
+        button.attributedTitle = NSAttributedString(string: string, attributes: attrs)
+    }
+
+    /// 状态栏仅显示百分比；文字保持系统默认（无色），仅图标按状态切换（出错→警告三角）。
     /// 显示模式：.carousel 轮播各订阅；.total 显示总百分比（Σ已用 / Σ总额）。
     private func updateButtonTitle() {
         guard let button = statusItem.button else { return }
@@ -113,34 +126,41 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let agg = aggregateUsage()
             if agg.total > 0 {
                 let pct = Double(agg.used) / Double(agg.total) * 100
-                button.title = " 总 \(Int(pct.rounded()))%"
+                setStatusTitle("Σ\(String(format: "%02d", Int(pct.rounded())))%")
                 button.toolTip = "共 \(sorted.count) 个订阅 · 已用 \(ByteFormatter.readable(agg.used)) / \(ByteFormatter.readable(agg.total))"
             } else {
-                button.title = " PTM"
+                setStatusTitle("PTM")
                 button.toolTip = nil
             }
         } else if let current = sorted[safe: min(displayIndex, max(0, sorted.count - 1))] {
-            let pct = current.lastTraffic?.usagePercentage ?? 0
-            if pct > 0 {
-                button.title = " \(Int(pct.rounded()))%"
-                button.toolTip = "\(current.name) · \(String(format: "%.1f%%", pct))"
+            // 关键：状态栏唯一的告警指示是左侧三角图标（anyError 分支），标题/百分比区禁止再出现 ⚠ 字符。
+            // 拉取失败时 lastTraffic 不会被清空（仅设置 lastError），「上次的数据」仍可用，故优先展示上次百分比。
+            if let traffic = current.lastTraffic {
+                let pct = traffic.usagePercentage
+                setStatusTitle("\(String(format: "%02d", Int(pct.rounded())))%")
+                if current.lastError != nil {
+                    button.toolTip = "\(current.name) · \(String(format: "%.1f%%", pct)) · 上次刷新失败"
+                } else {
+                    button.toolTip = "\(current.name) · \(String(format: "%.1f%%", pct))"
+                }
             } else if current.lastError != nil {
-                button.title = " ⚠"
+                // 无缓存（首拉即失败）：用 — 占位，错误详情放进 tooltip，而非用 ⚠ 文字重复告警
+                setStatusTitle("—")
                 button.toolTip = current.lastError
             } else {
-                button.title = " PTM"
+                setStatusTitle("PTM")
                 button.toolTip = current.name
             }
         } else {
-            button.title = " PTM"
+            setStatusTitle("PTM")
             button.toolTip = nil
         }
 
-        // 文字不染色；仅出错时换警告图标
+        // 文字保持系统默认（无色）；仅出错时把图标换成警告三角
         if anyError {
             button.image = templateImage("exclamationmark.triangle")
         } else {
-            button.image = templateImage("speedometer")
+            button.image = templateImage("network")
         }
     }
 

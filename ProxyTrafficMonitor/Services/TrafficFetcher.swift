@@ -52,6 +52,12 @@ final class TrafficFetcher: ObservableObject {
 
     /// 立即刷新所有订阅。并行拉取，每个订阅各自独立开始/结束，菜单内每行可独立显示转圈。
     func refresh(manual: Bool = false) {
+        #if DEBUG
+        guard !SubscriptionStore.isMockMode else {
+            PTMLogger.debug("Mock 模式：跳过网络拉取")
+            return
+        }
+        #endif
         guard beginRefresh(allRefreshID) else { return }
         let snapshot = store.subscriptions
         guard !snapshot.isEmpty else {
@@ -87,6 +93,9 @@ final class TrafficFetcher: ObservableObject {
     /// 刷新单个订阅（菜单项上的刷新按钮调用）。
     /// 不被全局刷新拦截：仅当该订阅自身正在拉取时才跳过，可与全部刷新并发进行。
     func refresh(subscription: Subscription, manual: Bool = false) {
+        #if DEBUG
+        guard !SubscriptionStore.isMockMode else { return }
+        #endif
         guard beginRefresh(subscription.id) else { return }
         Task {
             _ = await fetchOne(subscription)

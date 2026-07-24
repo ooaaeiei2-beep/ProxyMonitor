@@ -65,19 +65,30 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .help("编辑此订阅")
-                            Button(action: { store.remove(id: sub.id) }) {
+                            Button(action: { Task { await store.remove(id: sub.id) } }) {
                                 Image(systemName: "trash")
                             }
                             .buttonStyle(.borderless)
                             .help("删除此订阅")
                         }
                     }
-                    .onDelete { store.remove(atOffsets: $0) }
+                    .onDelete { offsets in
+                        Task { await store.remove(atOffsets: offsets) }
+                    }
                 }
             }
         }
         .padding(20)
         .frame(width: 480, height: 560)
+        // 修复 #4：Keychain 写入失败时弹窗告知用户链接未保存成功，仅 url 缺失。
+        .alert("订阅链接未保存成功", isPresented: Binding(
+            get: { store.keychainSaveError != nil },
+            set: { presented in if !presented { store.keychainSaveError = nil } }
+        )) {
+            Button("我知道了", role: .cancel) { store.keychainSaveError = nil }
+        } message: {
+            Text(store.keychainSaveError ?? "")
+        }
     }
 
     private func commit() {
@@ -87,11 +98,11 @@ struct SettingsView: View {
                 sub.name = newName
                 sub.url = newURL
                 sub.resetDay = day
-                store.update(sub)
+                Task { await store.update(sub) }
             }
             cancelEdit()
         } else {
-            store.add(Subscription(name: newName, url: newURL, resetDay: day))
+            Task { await store.add(Subscription(name: newName, url: newURL, resetDay: day)) }
             newName = ""
             newURL = ""
             newResetDay = ""
@@ -232,17 +243,17 @@ struct AppKitTextField: NSViewRepresentable {
 /// 构造预览用的 store（#Preview body 不能含多个语句 + return，抽到 helper）
 private func previewStore() -> SubscriptionStore {
     let store = SubscriptionStore(defaults: UserDefaults(suiteName: "ProxyTrafficMonitorPreview") ?? .standard)
-    store.removeAll()
+    Task { await store.removeAll() }
 
     var sub1 = Subscription(name: "订阅1 · fcapp.run", resetDay: 25)
     sub1.lastTraffic = TrafficInfo(upload: 1_549_406_489, download: 27_259_548_951,
                                    total: 115_964_116_992, expire: 1_792_858_862, fetchedAt: Date())
-    store.add(sub1)
+    Task { await store.add(sub1) }
 
     var sub2 = Subscription(name: "订阅2 · cocoduck.cc", resetDay: 3)
     sub2.lastTraffic = TrafficInfo(upload: 2_768_312_077, download: 46_639_030_977,
                                    total: 53_687_091_200, expire: 1_806_759_842, fetchedAt: Date())
-    store.add(sub2)
+    Task { await store.add(sub2) }
 
     return store
 }

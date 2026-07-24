@@ -19,7 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.store = store
         self.fetcher = fetcher
         statusBar = StatusBarController(store: store, fetcher: fetcher)
-        fetcher.start()
+        // 先 await 异步加载（含 Keychain 读取，修复 #5 不再卡主线程），完成后再启动首次拉取，
+        // 保持「启动即拉取一次」的行为不变（store 必须加载完才能拿到订阅列表）。
+        Task {
+            await store.load()
+            fetcher.start()
+        }
 
         // 系统唤醒后延迟 5 分钟再刷新（休眠期间定时器不触发，避免数据陈旧；
         // 用 Task 延迟 + 去重，避免多次唤醒叠加多个刷新）
