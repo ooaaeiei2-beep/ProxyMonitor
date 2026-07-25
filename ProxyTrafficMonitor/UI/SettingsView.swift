@@ -197,7 +197,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
-            window.title = "ProxyTrafficMonitor 设置"
+            window.title = "ProxyMonitor 设置"
             window.contentView = hosting
             window.center()
             window.isReleasedWhenClosed = false
