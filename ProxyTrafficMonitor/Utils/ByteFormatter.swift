@@ -10,6 +10,11 @@ enum ByteFormatter {
         String(format: "%.2f", Double(bytes) / gb)
     }
 
+    /// 字节/天，格式化为「X.XX」形式（用于日均消耗展示，单位 GB）
+    static func gbPerDay(_ bytesPerDay: Double) -> String {
+        String(format: "%.2f", bytesPerDay / gb)
+    }
+
     /// 智能单位（GB / MB / B）
     static func readable(_ bytes: Int64) -> String {
         let value = Double(bytes)

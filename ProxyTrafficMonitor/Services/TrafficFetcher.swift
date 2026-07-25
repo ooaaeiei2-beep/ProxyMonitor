@@ -52,12 +52,6 @@ final class TrafficFetcher: ObservableObject {
 
     /// 立即刷新所有订阅。并行拉取，每个订阅各自独立开始/结束，菜单内每行可独立显示转圈。
     func refresh(manual: Bool = false) {
-        #if DEBUG
-        guard !SubscriptionStore.isMockMode else {
-            PTMLogger.debug("Mock 模式：跳过网络拉取")
-            return
-        }
-        #endif
         guard beginRefresh(allRefreshID) else { return }
         let snapshot = store.subscriptions
         guard !snapshot.isEmpty else {
@@ -93,9 +87,6 @@ final class TrafficFetcher: ObservableObject {
     /// 刷新单个订阅（菜单项上的刷新按钮调用）。
     /// 不被全局刷新拦截：仅当该订阅自身正在拉取时才跳过，可与全部刷新并发进行。
     func refresh(subscription: Subscription, manual: Bool = false) {
-        #if DEBUG
-        guard !SubscriptionStore.isMockMode else { return }
-        #endif
         guard beginRefresh(subscription.id) else { return }
         Task {
             _ = await fetchOne(subscription)
@@ -123,6 +114,11 @@ final class TrafficFetcher: ObservableObject {
     }
 
     private func fetchOne(_ subscription: Subscription) async -> Bool {
+        #if DEBUG
+        if SubscriptionStore.isMockMode {
+            return await fetchOneMock(subscription)
+        }
+        #endif
         do {
             let traffic = try await provider.fetchTraffic(for: subscription)
             store.updateTraffic(id: subscription.id, traffic: traffic)
@@ -139,6 +135,39 @@ final class TrafficFetcher: ObservableObject {
             return false
         }
     }
+
+#if DEBUG
+    /// Mock 模式下的模拟拉取：制造网络延迟让状态栏 spinner 可见，并抖动已用流量使数字变化。
+    /// 带 lastError 的订阅（如 mock 的 SG Trojan）刷新后仍抛错，保留"错误图标"演示路径。
+    private func fetchOneMock(_ subscription: Subscription) async -> Bool {
+        // 模拟网络往返延迟（0.7~1.4s），让"刷新中"状态可见
+        try? await Task.sleep(nanoseconds: UInt64(Int.random(in: 700...1400)) * 1_000_000)
+
+        if let existingError = subscription.lastError {
+            let msg = existingError
+            store.setError(id: subscription.id, message: msg)
+            lastError = msg
+            PTMLogger.debug("Mock 拉取（错误态保持）：\(msg)")
+            return false
+        }
+
+        let base = subscription.lastTraffic
+            ?? TrafficInfo(upload: 0, download: 0, total: 100_000_000_000, expire: 0, fetchedAt: Date())
+        let jitter = 1 + Double.random(in: 0.002...0.02)   // 已用流量 +0.2%~2%
+        let newUsed = Double(base.used) * jitter
+        let newDownload = Int64(max(newUsed - Double(base.upload), 0))
+        let traffic = TrafficInfo(
+            upload: base.upload,
+            download: newDownload,
+            total: base.total,
+            expire: base.expire,
+            fetchedAt: Date()
+        )
+        store.updateTraffic(id: subscription.id, traffic: traffic)
+        PTMLogger.debug("Mock 拉取成功：\(subscription.name) → \(String(format: "%.2f%%", traffic.usagePercentage))")
+        return true
+    }
+#endif
 
     /// 自递归非重复定时器：每次触发后用新的随机间隔（20~30 分钟）重新调度，避免长时间固定节奏。
     private func scheduleNext() {

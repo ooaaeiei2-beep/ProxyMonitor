@@ -22,6 +22,7 @@ enum MockData {
             expire: Int64(now.addingTimeInterval(86400 * 20).timeIntervalSince1970),
             fetchedAt: now
         )
+        a.history = Self.mockHistory(endingAt: a.lastTraffic!)
 
         var b = Subscription(name: "JP SoftEther", resetDay: 15)
         b.lastTraffic = TrafficInfo(
@@ -31,6 +32,7 @@ enum MockData {
             expire: Int64(now.addingTimeInterval(86400 * 5).timeIntervalSince1970),
             fetchedAt: now
         )
+        b.history = Self.mockHistory(endingAt: b.lastTraffic!)
 
         var c = Subscription(name: "SG Trojan", resetDay: 28)
         c.lastTraffic = TrafficInfo(
@@ -43,5 +45,27 @@ enum MockData {
         c.lastError = "403 Forbidden (mock)"
 
         return [a, b, c]
+    }
+
+    /// 生成截止「昨天」的 days 天每日快照，用于 Mock 模式直接演示趋势，免去等待多日真实拉取。
+    /// used 从低位线性爬升到 finalUsed 附近（严格小于 finalUsed），且严格单调递增，
+    /// 避免触发 Trend 的「重置截断」（used 单日骤降超一半会被判为重置点）。
+    /// 今天刷新会再追加一帧（≈finalUsed），使跨度继续延伸且仍单调递增。
+    private static func mockHistory(endingAt traffic: TrafficInfo, days: Int = 12) -> [TrafficRecord] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let finalUsed = traffic.used
+        let uploadRatio = finalUsed > 0 ? Double(traffic.upload) / Double(finalUsed) : 0
+        var records: [TrafficRecord] = []
+        for i in 1...days {
+            let daysAgo = days - i + 1            // i=1 → 最旧(12天前)；i=days → 昨天
+            guard let d = cal.date(byAdding: .day, value: -daysAgo, to: today) else { continue }
+            let progress = Double(i) / Double(days + 1)   // 昨天 ≈ finalUsed * days/(days+1) < finalUsed
+            let used = Int64(Double(finalUsed) * progress)
+            let upload = Int64(Double(used) * uploadRatio)
+            let download = max(used - upload, 0)
+            records.append(TrafficRecord(date: d, upload: upload, download: download))
+        }
+        return records
     }
 }

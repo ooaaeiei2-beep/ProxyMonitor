@@ -42,12 +42,23 @@ struct SettingsView: View {
 
             Divider()
 
-            // 状态栏显示模式：轮播各订阅百分比 / 总百分比
+            // 状态栏显示模式：占比最高（默认）/ 轮播各订阅 / 总百分比
             Picker("状态栏显示", selection: $store.displayMode) {
+                Text("占比最高").tag(DisplayMode.max)
                 Text("轮播各订阅").tag(DisplayMode.carousel)
                 Text("总百分比").tag(DisplayMode.total)
             }
             .pickerStyle(.segmented)
+
+            Divider()
+
+            #if DEBUG
+            Toggle("Mock 模式（调试）", isOn: $store.mockModeEnabled)
+                .help("开启后使用内置假数据并模拟刷新拉取，便于观察状态栏响应；关闭即恢复真实数据")
+                .onChange(of: store.mockModeEnabled) { newValue in
+                    Task { await store.setMockMode(newValue) }
+                }
+            #endif
 
             Divider()
 

@@ -16,7 +16,7 @@ final class SubscriptionMenuItemView: NSView {
 
     private let padding: CGFloat = 12
     private let width: CGFloat = 280
-    private let height: CGFloat = 92
+    private let height: CGFloat = 120
     private var contentWidth: CGFloat { width - padding * 2 }
 
     private var nameLabel: NSTextField!
@@ -24,6 +24,7 @@ final class SubscriptionMenuItemView: NSView {
     private var track: NSView!
     private var fill: NSView!
     private var detailLabel: NSTextField!
+    private var trendLabel: NSTextField!
     private var refreshBtn: NSButton!
     private var spinner: NSProgressIndicator!
 
@@ -60,7 +61,13 @@ final class SubscriptionMenuItemView: NSView {
         detailLabel = NSTextField(wrappingLabelWithString: "")
         detailLabel.font = .systemFont(ofSize: 11)
         detailLabel.textColor = .secondaryLabelColor
-        detailLabel.frame = NSRect(x: padding, y: 2, width: contentWidth, height: 44)
+        detailLabel.frame = NSRect(x: padding, y: 42, width: contentWidth, height: 30)
+
+        trendLabel = NSTextField(labelWithString: "趋势 收集中")
+        trendLabel.font = .systemFont(ofSize: 11)
+        trendLabel.textColor = .secondaryLabelColor
+        trendLabel.lineBreakMode = .byTruncatingTail
+        trendLabel.frame = NSRect(x: padding, y: 12, width: contentWidth, height: 24)
 
         refreshBtn = NSButton(frame: NSRect(x: width - padding - 16, y: height - 22, width: 16, height: 16))
         refreshBtn.bezelStyle = .regularSquare
@@ -82,6 +89,7 @@ final class SubscriptionMenuItemView: NSView {
         addSubview(pctLabel)
         addSubview(track)
         addSubview(detailLabel)
+        addSubview(trendLabel)
         addSubview(refreshBtn)
         addSubview(spinner)
     }
@@ -98,6 +106,7 @@ final class SubscriptionMenuItemView: NSView {
             detailLabel.stringValue = subscription.lastError != nil
                 ? "拉取失败：\(subscription.lastError!)"
                 : "暂无数据，点击「立即刷新」"
+            renderTrend()
             return
         }
 
@@ -122,6 +131,42 @@ final class SubscriptionMenuItemView: NSView {
             extraParts.append("⚠ 上次刷新失败")
         }
         rebuildDetail()
+        renderTrend()
+    }
+
+    /// 根据 subscription.trend 计算趋势文案并写入 trendLabel。
+    /// 始终单行显示（trendLabel 已设 byTruncatingTail，正常不触发省略），绝不拆成两行。
+    /// 无足够历史 → 「趋势 收集中」(secondaryLabelColor)；
+    /// 否则展示日均速率，可选「预计 N 天后耗尽（MM-dd）」；
+    /// 若周期内将超量，整行改 .systemOrange，文案压缩为「⚠ 趋势 ↑ +X/天 · N天后超量（MM-dd）」。
+    private func renderTrend() {
+        let t = subscription.trend
+        if !t.hasEnoughData {
+            trendLabel.textColor = .secondaryLabelColor
+            trendLabel.stringValue = "趋势 收集中"
+            return
+        }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MM-dd"
+        let burn = ByteFormatter.readable(Int64(t.burnRatePerDay ?? 0))
+
+        if t.willExceedBeforeReset {
+            // 超量：整行橙色、⚠ 前置、耗尽文案压缩为「N天后超量」
+            trendLabel.textColor = .systemOrange
+            var text = "⚠ 趋势 ↑ +\(burn)/天"
+            if let d = t.daysToExhaust, let date = t.estimatedExhaustionDate {
+                text += " · \(d)天后超量（\(fmt.string(from: date))）"
+            }
+            trendLabel.stringValue = text
+        } else {
+            // 非超量：secondaryLabelColor，保持原样
+            trendLabel.textColor = .secondaryLabelColor
+            var text = "趋势 ↑ +\(burn)/天"
+            if let d = t.daysToExhaust, let date = t.estimatedExhaustionDate {
+                text += " · 预计 \(d) 天后耗尽（\(fmt.string(from: date))）"
+            }
+            trendLabel.stringValue = text
+        }
     }
 
     @objc private func didTapRefresh() {
@@ -210,7 +255,7 @@ private func previewSubscription(name: String, resetDay: Int,
     SubscriptionMenuItemPreview(subscription: previewSubscription(
         name: "订阅2 · cocoduck.cc", resetDay: 3,
         upload: 2_768_312_077, download: 46_639_030_977, total: 53_687_091_200, expire: 1_806_759_842))
-    .frame(width: 280, height: 92)
+    .frame(width: 280, height: 120)
     .padding(8)
 }
 
@@ -218,7 +263,7 @@ private func previewSubscription(name: String, resetDay: Int,
     SubscriptionMenuItemPreview(subscription: previewSubscription(
         name: "订阅1 · fcapp.run", resetDay: 25,
         upload: 1_549_406_489, download: 27_259_548_951, total: 115_964_116_992, expire: 1_792_858_862))
-    .frame(width: 280, height: 92)
+    .frame(width: 280, height: 120)
     .padding(8)
 }
 
@@ -227,7 +272,7 @@ private func previewSubscription(name: String, resetDay: Int,
         name: "订阅X · 失效链接", resetDay: 1,
         upload: 0, download: 0, total: 1, expire: 0,
         lastError: "网络错误: 似乎已断开与互联网的连接"))
-    .frame(width: 280, height: 92)
+    .frame(width: 280, height: 120)
     .padding(8)
 }
 #endif

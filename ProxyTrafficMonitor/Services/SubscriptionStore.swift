@@ -3,15 +3,16 @@ import Combine
 
 /// 状态栏显示模式
 enum DisplayMode: String, CaseIterable {
+    case max        // 占比最高的订阅（默认/推荐）
     case carousel   // 轮播各订阅百分比
-    case total      // 显示总百分比（Σ已用 / Σ总额）
+    case total      // 显示所有订阅的总百分比
 }
 
 /// 订阅配置与历史的持久化（UserDefaults + JSON 编码；订阅链接 url 存 Keychain）
 final class SubscriptionStore: ObservableObject {
     @Published private(set) var subscriptions: [Subscription] = []
-    /// 状态栏显示模式（默认轮播），改动即持久化
-    @Published var displayMode: DisplayMode = .carousel {
+    /// 状态栏显示模式（默认占比最高 .max），改动即持久化
+    @Published var displayMode: DisplayMode = .max {
         didSet { defaults.set(displayMode.rawValue, forKey: "displayMode.v1") }
     }
     /// Keychain 写入失败提示（订阅链接未保存成功）。UI 层观察此属性弹 Alert（修复 #4）。
@@ -25,6 +26,23 @@ final class SubscriptionStore: ObservableObject {
     /// `TrafficFetcher` 据此跳过网络拉取，避免 mock 数据被「拉取出错」覆盖。
     static var isMockMode: Bool = false
 
+    /// 运行时 Mock 开关（仅 DEBUG）。设置界面 Toggle 绑定；持久化到 UserDefaults。
+    @Published var mockModeEnabled: Bool = {
+        #if DEBUG
+        return UserDefaults.standard.bool(forKey: "mockMode.v1")
+        #else
+        return false
+        #endif
+    }()
+
+    /// DEBUG 下是否启用 mock：环境变量 PTM_USE_MOCK=1 或 持久化开关任一为真。
+    #if DEBUG
+    private var shouldUseMock: Bool {
+        ProcessInfo.processInfo.environment["PTM_USE_MOCK"] == "1"
+        || UserDefaults.standard.bool(forKey: "mockMode.v1")
+    }
+    #endif
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // 注意：`load()` 已改为 async（修复 #5，避免主线程同步读 Keychain 卡 UI），
@@ -35,17 +53,37 @@ final class SubscriptionStore: ObservableObject {
     /// 完成后在主线程更新 @Published 状态。Mock 模式直接返回，不触碰真实 Keychain。
     func load() async {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["PTM_USE_MOCK"] == "1" {
+        if shouldUseMock {
             Self.isMockMode = true
-            var mock = MockData.subscriptions
-            for i in mock.indices { mock[i].url = "mock://\(mock[i].name)" }
-            let snapshot = mock
-            await MainActor.run { self.subscriptions = snapshot }
-            PTMLogger.info("Mock 模式已启用（PTM_USE_MOCK=1），跳过 Keychain 读取")
+            await loadMock()
             return
         }
         #endif
+        Self.isMockMode = false
+        await loadReal()
+    }
 
+#if DEBUG
+    /// 运行时切换 Mock 模式：写入持久化开关、设置静态标志并重载对应数据。
+    func setMockMode(_ on: Bool) async {
+        UserDefaults.standard.set(on, forKey: "mockMode.v1")
+        Self.isMockMode = on
+        if on { await loadMock() } else { await loadReal() }
+    }
+
+    private func loadMock() async {
+        var mock = MockData.subscriptions
+        for i in mock.indices { mock[i].url = "mock://\(mock[i].name)" }
+        let snapshot = mock
+        await MainActor.run {
+            self.subscriptions = snapshot
+            self.displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode.v1") ?? "") ?? .max
+        }
+        PTMLogger.info("Mock 模式已启用，跳过 Keychain 读取")
+    }
+#endif
+
+    private func loadReal() async {
         guard let data = defaults.data(forKey: key),
               let decoded = try? JSONDecoder().decode([Subscription].self, from: data) else { return }
         var result = decoded
@@ -56,7 +94,7 @@ final class SubscriptionStore: ObservableObject {
         let snapshot = result   // 拷贝为不可变，避免被并发闭包捕获 var
         await MainActor.run {
             self.subscriptions = snapshot
-            self.displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode.v1") ?? "") ?? .carousel
+            self.displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode.v1") ?? "") ?? .max
         }
     }
 
