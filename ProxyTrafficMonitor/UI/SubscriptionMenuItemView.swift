@@ -16,7 +16,7 @@ final class SubscriptionMenuItemView: NSView {
 
     private let padding: CGFloat = 12
     private let width: CGFloat = 280
-    private let height: CGFloat = 120
+    private let height: CGFloat = 110
     private var contentWidth: CGFloat { width - padding * 2 }
 
     private var nameLabel: NSTextField!
@@ -61,13 +61,13 @@ final class SubscriptionMenuItemView: NSView {
         detailLabel = NSTextField(wrappingLabelWithString: "")
         detailLabel.font = .systemFont(ofSize: 11)
         detailLabel.textColor = .secondaryLabelColor
-        detailLabel.frame = NSRect(x: padding, y: 42, width: contentWidth, height: 30)
+        detailLabel.frame = NSRect(x: padding, y: 34, width: contentWidth, height: 30)
 
         trendLabel = NSTextField(labelWithString: "趋势 收集中")
         trendLabel.font = .systemFont(ofSize: 11)
         trendLabel.textColor = .secondaryLabelColor
         trendLabel.lineBreakMode = .byTruncatingTail
-        trendLabel.frame = NSRect(x: padding, y: 12, width: contentWidth, height: 24)
+        trendLabel.frame = NSRect(x: padding, y: 6, width: contentWidth, height: 22)
 
         refreshBtn = NSButton(frame: NSRect(x: width - padding - 16, y: height - 22, width: 16, height: 16))
         refreshBtn.bezelStyle = .regularSquare
@@ -255,7 +255,7 @@ private func previewSubscription(name: String, resetDay: Int,
     SubscriptionMenuItemPreview(subscription: previewSubscription(
         name: "订阅2 · cocoduck.cc", resetDay: 3,
         upload: 2_768_312_077, download: 46_639_030_977, total: 53_687_091_200, expire: 1_806_759_842))
-    .frame(width: 280, height: 120)
+    .frame(width: 280, height: 110)
     .padding(8)
 }
 
@@ -263,7 +263,7 @@ private func previewSubscription(name: String, resetDay: Int,
     SubscriptionMenuItemPreview(subscription: previewSubscription(
         name: "订阅1 · fcapp.run", resetDay: 25,
         upload: 1_549_406_489, download: 27_259_548_951, total: 115_964_116_992, expire: 1_792_858_862))
-    .frame(width: 280, height: 120)
+    .frame(width: 280, height: 110)
     .padding(8)
 }
 
@@ -272,7 +272,7 @@ private func previewSubscription(name: String, resetDay: Int,
         name: "订阅X · 失效链接", resetDay: 1,
         upload: 0, download: 0, total: 1, expire: 0,
         lastError: "网络错误: 似乎已断开与互联网的连接"))
-    .frame(width: 280, height: 120)
+    .frame(width: 280, height: 110)
     .padding(8)
 }
 #endif

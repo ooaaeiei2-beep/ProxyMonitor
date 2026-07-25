@@ -25,6 +25,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var displayIndex = 0            // 当前轮播显示的订阅索引
     private var carouselTimer: Timer?
     private let carouselInterval: TimeInterval = 5   // 轮播间隔 5 秒
+    private var staleTimer: Timer?          // 数据陈旧检查：每 60s 重算状态栏图标（clock / network）
 
     private var isMenuOpen = false                    // 菜单是否打开（避免打开时整体重排打断交互）
     private var liveTimer: Timer?                     // 菜单打开时的「更新于」live 计时器
@@ -44,6 +45,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         configureButton()
         rebuildMenu()
         startCarousel()
+        startStaleTimer()
 
         // 订阅或流量变化：刷新状态栏百分比；菜单打开时**就地推送最新数据到各菜单项**（不做整体重排，避免打断交互）。
         // 关键：用 DispatchQueue.main 而非 RunLoop.main —— 前者在主队列（common modes）执行，
@@ -102,32 +104,37 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return img
     }
 
-    /// 设置状态栏按钮文字：等宽数字字体（monospacedDigitSystemFont）确保百分比变化时
-    /// 菜单栏项宽度恒定、不左右跳动；前景色固定 `.labelColor`（系统默认、无色，自适应深浅），
-    /// 严守「状态栏文字无色」铁律。仅设字体，不改颜色。
+    /// 设置状态栏按钮文字：以菜单栏标准尺寸（`NSFont.menuBarFont(ofSize: 0).pointSize`，
+    /// 即系统菜单栏字号）为基底，使用系统等宽数字字体 `monospacedDigitSystemFont`，
+    /// 确保百分比轮播切换时菜单栏项宽度恒定、不左右跳动；前景色固定 `.labelColor`
+    /// （系统默认、无色，自适应深浅），严守「状态栏文字无色」铁律。仅设字体，不改颜色。
     private func setStatusTitle(_ string: String) {
         guard let button = statusItem.button else { return }
+        let size = NSFont.menuBarFont(ofSize: 0).pointSize   // 取菜单栏字号
+        let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .regular),
+            .font: font,
             .foregroundColor: NSColor.labelColor,
             .expansion: -0.2 as CGFloat   // 横向字距压缩：状态栏项更窄（−10%），字重/字号/字形不变
         ]
         button.attributedTitle = NSAttributedString(string: string, attributes: attrs)
     }
 
-    /// 状态栏仅显示百分比；文字保持系统默认（无色），仅图标按状态切换（出错→警告三角）。
-    /// 显示模式：.carousel 轮播各订阅；.total 显示总百分比（Σ已用 / Σ总额）。
+    /// 状态栏仅显示百分比；文字保持系统默认（无色），仅图标按状态切换（出错→警告三角；陈旧→clock）。
+    /// 显示模式：.carousel 轮播各订阅；.total 显示总百分比（已用 / 总额）。
     private func updateButtonTitle() {
         guard let button = statusItem.button else { return }
         let sorted = sortedSubscriptions()
         let anyError = sorted.contains { $0.lastError != nil }
+        var displayedPct: Int? = nil
 
         if store.displayMode == .total {
             let agg = aggregateUsage()
             if agg.total > 0 {
                 let pct = Double(agg.used) / Double(agg.total) * 100
-                setStatusTitle("Σ\(String(format: "%02d", Int(pct.rounded())))%")
-                button.toolTip = "共 \(sorted.count) 个订阅 · 已用 \(ByteFormatter.readable(agg.used)) / \(ByteFormatter.readable(agg.total))"
+                displayedPct = Int(pct.rounded())
+                setStatusTitle("\(displayedPct!)%")          // 纯整数百分比，无 Σ 前缀
+                button.toolTip = "总流量占比 \(displayedPct!)%"
             } else {
                 setStatusTitle("PTM")
                 button.toolTip = nil
@@ -137,7 +144,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             // 拉取失败时 lastTraffic 不会被清空（仅设置 lastError），「上次的数据」仍可用，故优先展示上次百分比。
             if let traffic = current.lastTraffic {
                 let pct = traffic.usagePercentage
-                setStatusTitle("\(String(format: "%02d", Int(pct.rounded())))%")
+                displayedPct = Int(pct.rounded())
+                setStatusTitle("\(displayedPct!)%")          // 无前导零的整数百分比（如 73% 而非 07%）
                 if current.lastError != nil {
                     button.toolTip = "\(current.name) · \(String(format: "%.1f%%", pct)) · 上次刷新失败"
                 } else {
@@ -156,11 +164,43 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.toolTip = nil
         }
 
-        // 文字保持系统默认（无色）；仅出错时把图标换成警告三角
+        refreshButtonAppearance()
+        updateAccessibilityLabel(hasError: anyError, pct: displayedPct)
+    }
+
+    /// 刷新状态栏按钮图标：错误优先于陈旧，陈旧优先于正常。
+    /// - 活跃错误 → exclamationmark.triangle
+    /// - 无错误但数据陈旧（>10 分钟无成功刷新）→ clock
+    /// - 否则 → network
+    private func refreshButtonAppearance() {
+        guard let button = statusItem.button else { return }
+        let anyError = store.subscriptions.contains { $0.lastError != nil }
         if anyError {
             button.image = templateImage("exclamationmark.triangle")
+        } else if isDataStale() {
+            button.image = templateImage("clock")
         } else {
             button.image = templateImage("network")
+        }
+    }
+
+    /// 数据是否陈旧：存在「最后成功刷新时间」且距现在已超过 10 分钟（600s）。
+    /// 从未成功刷新过（lastSuccessfulFetchAt 为 nil）不视为陈旧（无数据可陈旧）。
+    private func isDataStale() -> Bool {
+        guard let last = store.lastSuccessfulFetchAt else { return false }
+        return Date().timeIntervalSince(last) > 600
+    }
+
+    /// 设置状态栏按钮可访问性标签，便于 VoiceOver / 辅助功能朗读。
+    /// 注意：AppKit 中 accessibilityLabel 是方法（NSAccessibility 协议），需用 setAccessibilityLabel(_:) 赋值。
+    private func updateAccessibilityLabel(hasError: Bool, pct: Int?) {
+        guard let button = statusItem.button else { return }
+        if hasError {
+            button.setAccessibilityLabel("代理流量, 拉取失败")
+        } else if let pct {
+            button.setAccessibilityLabel("代理流量 \(pct)%, 正常")
+        } else {
+            button.setAccessibilityLabel("代理流量, 无数据")
         }
     }
 
@@ -214,6 +254,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard sorted.count > 1 else { return }
         displayIndex = (displayIndex + 1) % sorted.count
         updateButtonTitle()
+    }
+
+    // MARK: - 数据陈旧检查
+
+    /// 启动「数据陈旧」检查定时器：每 60s 触发一次，重新计算状态栏图标
+    ///（>10 分钟无成功刷新则显示 clock）。用 scheduledTimer（common modes）即可在主运行循环空闲时刷新。
+    private func startStaleTimer() {
+        staleTimer?.invalidate()
+        staleTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshButtonAppearance() }
+        }
     }
 
     // MARK: - 菜单
@@ -391,6 +442,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - 生命周期
+
+    /// 释放所有定时器，避免悬挂 Timer 引用导致的内存泄漏 / 野回调。
+    deinit {
+        carouselTimer?.invalidate()
+        staleTimer?.invalidate()
+        liveTimer?.invalidate()
+        outcomeBannerTimer?.invalidate()
     }
 }
 

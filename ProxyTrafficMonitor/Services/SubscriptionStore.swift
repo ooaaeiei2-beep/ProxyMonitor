@@ -15,6 +15,10 @@ final class SubscriptionStore: ObservableObject {
     @Published var displayMode: DisplayMode = .max {
         didSet { defaults.set(displayMode.rawValue, forKey: "displayMode.v1") }
     }
+    /// 最近一次「成功」拉取完成的时间。状态栏据此判断数据是否陈旧（>10 分钟无成功刷新 → clock 图标）。
+    /// 在 `updateTraffic`（所有成功路径的唯一入口）中赋值，覆盖真实与 Mock 拉取。
+    @Published private(set) var lastSuccessfulFetchAt: Date?
+
     /// Keychain 写入失败提示（订阅链接未保存成功）。UI 层观察此属性弹 Alert（修复 #4）。
     /// 即使 Keychain 失败，其余配置字段仍会 `save()` 到 UserDefaults，仅 url 会缺失——文案已说明。
     @Published var keychainSaveError: String?
@@ -187,6 +191,7 @@ final class SubscriptionStore: ObservableObject {
         guard let index = subscriptions.firstIndex(where: { $0.id == id }) else { return }
         subscriptions[index].lastTraffic = traffic
         subscriptions[index].lastError = nil   // 成功即清除错误
+        lastSuccessfulFetchAt = Date()         // 记录成功刷新时间（数据陈旧判定用）
 
         let today = calendar.startOfDay(for: Date())
         subscriptions[index].history.removeAll { calendar.isDate($0.date, inSameDayAs: today) }
