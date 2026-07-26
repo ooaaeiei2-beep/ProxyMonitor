@@ -170,7 +170,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     /// 刷新状态栏按钮图标：错误优先于陈旧，陈旧优先于正常。
     /// - 活跃错误 → exclamationmark.triangle
-    /// - 无错误但数据陈旧（>10 分钟无成功刷新）→ clock
+    /// - 无错误但数据陈旧（>120 分钟无成功刷新）→ clock_refresh
     /// - 否则 → network
     private func refreshButtonAppearance() {
         guard let button = statusItem.button else { return }
@@ -178,17 +178,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if anyError {
             button.image = templateImage("exclamationmark.triangle")
         } else if isDataStale() {
-            button.image = templateImage("clock")
+            button.image = templateImage("clock_refresh")
         } else {
             button.image = templateImage("network")
         }
     }
 
-    /// 数据是否陈旧：存在「最后成功刷新时间」且距现在已超过 10 分钟（600s）。
+    /// 数据是否陈旧：存在「最后成功刷新时间」且距现在已超过 120 分钟（7200s）。
     /// 从未成功刷新过（lastSuccessfulFetchAt 为 nil）不视为陈旧（无数据可陈旧）。
     private func isDataStale() -> Bool {
         guard let last = store.lastSuccessfulFetchAt else { return false }
-        return Date().timeIntervalSince(last) > 600
+        return Date().timeIntervalSince(last) > 7200
     }
 
     /// 设置状态栏按钮可访问性标签，便于 VoiceOver / 辅助功能朗读。
