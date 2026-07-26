@@ -122,9 +122,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let digitFont = NSFont.monospacedDigitSystemFont(ofSize: barFont.pointSize, weight: .regular)
         let maxTextWidth = ("100%" as NSString).size(withAttributes: [.font: digitFont]).width
         let iconSize: CGFloat = 18
-        let gap: CGFloat = 4
+        let gap: CGFloat = 2
         let contentWidth = iconSize + gap + maxTextWidth
-        let sidePadding: CGFloat = 6
+        let sidePadding: CGFloat = 2
         return ceil(contentWidth) + sidePadding * 2
     }()
 
@@ -195,6 +195,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let textX = iconSize + gap
             let textY = (barHeight - textSize.height) / 2
             (text as NSString).draw(at: CGPoint(x: textX, y: textY), withAttributes: textAttrs)
+            return true
         }
         image.isTemplate = true
         return image
