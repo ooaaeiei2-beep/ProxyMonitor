@@ -17,6 +17,7 @@ private let standardMenuRowHeight: CGFloat = {
 
 /// 状态栏控制器：创建 NSStatusItem，构建下拉菜单
 @MainActor
+
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let store: SubscriptionStore
@@ -36,6 +37,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // 刷新结果反馈（选项 B：仅底部汇总行，状态栏与「立即刷新」项标题均不变）
     private var outcomeBannerItem: NSMenuItem?       // 菜单底部临时汇总行
     private var outcomeBannerTimer: Timer?           // 汇总行自动移除定时器
+
+    // 方向 B：图标 + 文字合成进单张 NSImage（template），只改 button.image 并固定 length，
+    // 彻底消除「运行时改 length → WindowServer 几何推送」与「子 layer.contents 重绘」两个死循环触发源。
+    private var lastRenderedString: String?          // 记录当前文字，供深浅色切换 / 数据陈旧检查重渲染
 
     init(store: SubscriptionStore, fetcher: TrafficFetcher) {
         self.store = store
@@ -86,6 +91,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 self?.updateButtonTitle()
             }
             .store(in: &cancellables)
+
+        // 深浅色模式切换时重渲染状态栏：合成图为 template，AppKit 会用 contentTintColor 自动着色、
+        // 菜单高亮时自动反色；此处重渲染仅确保布局/内容在外观变化后仍正确。
+        DistributedNotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppearanceChange),
+            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil
+        )
     }
 
     private func configureButton() {
@@ -93,31 +107,97 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             PTMLogger.error("statusItem.button 为 nil")
             return
         }
-        button.image = templateImage("network")
-        setStatusTitle("PTM")   // 始终显示文字标识，确保按钮可见
+        // 一次性固定状态项长度：按「图标(~18pt) + 间距(4pt) + 最宽文本(100%)」的实测宽度预留，
+        // 之后任何渲染都不再改 length，从源头消除 length 推送触发的重绘死循环（触发源 1）。
+        statusItem.length = Self.fixedStatusLength
+        // 初始合成图（network 图标 + 占位文字 PTM）
+        button.image = compositeStatusImage(iconName: "network", text: "PTM")
         PTMLogger.info("状态栏按钮已配置")
     }
 
-    private func templateImage(_ name: String) -> NSImage? {
-        let img = NSImage(systemSymbolName: name, accessibilityDescription: "代理流量")
-        img?.isTemplate = true
-        return img
+    /// 状态项固定长度：容纳「图标 + 间距 + 最宽文本 100%」并左右各留 6pt 内边距。
+    /// 仅在 configureButton 中赋值一次，渲染阶段绝不修改，从源头消除 length 触发的重绘死循环。
+    private static let fixedStatusLength: CGFloat = {
+        let barFont = NSFont.menuBarFont(ofSize: 0)
+        let digitFont = NSFont.monospacedDigitSystemFont(ofSize: barFont.pointSize, weight: .regular)
+        let maxTextWidth = ("100%" as NSString).size(withAttributes: [.font: digitFont]).width
+        let iconSize: CGFloat = 18
+        let gap: CGFloat = 4
+        let contentWidth = iconSize + gap + maxTextWidth
+        let sidePadding: CGFloat = 6
+        return ceil(contentWidth) + sidePadding * 2
+    }()
+
+    /// 渲染状态栏：把「SF Symbol 图标 + 等宽数字文字」一次性合成进单张 NSImage（template），
+    /// 只赋值给 `button.image`。`statusItem.length` 已由 configureButton 固定，此处不再改动，
+    /// 从而同时消除两个死循环触发源：
+    ///  - 触发源 1（几何推送）：不再运行时改 statusItem.length；
+    ///  - 触发源 2（子 layer 重绘）：不再用 textView 子 view 的 layer.contents 脏化按钮。
+    /// 合成图设为 template（isTemplate = true），AppKit 用 contentTintColor（labelColor）自动着色，
+    /// 并在菜单高亮时自动反色，与原本 button.image 的图标行为一致、最省心。
+    private func renderStatusItem(text: String, iconName: String? = nil) {
+        guard let button = statusItem.button else { return }
+
+        // ---- 确定图标 ----
+        let resolvedIconName: String
+        if let explicit = iconName {
+            resolvedIconName = explicit
+        } else {
+            let anyError = store.subscriptions.contains { $0.lastError != nil }
+            if anyError {
+                resolvedIconName = "exclamationmark.triangle"
+            } else if isDataStale() {
+                resolvedIconName = "clock.arrow.2.circlepath"
+            } else {
+                resolvedIconName = "network"
+            }
+        }
+
+        // ---- 合成单图（图标 + 文字），只改 button.image ----
+        button.image = compositeStatusImage(iconName: resolvedIconName, text: text)
+
+        // 记录供深浅色切换 / 数据陈旧检查重渲染
+        lastRenderedString = text
     }
 
-    /// 设置状态栏按钮文字：以菜单栏标准尺寸（`NSFont.menuBarFont(ofSize: 0).pointSize`，
-    /// 即系统菜单栏字号）为基底，使用系统等宽数字字体 `monospacedDigitSystemFont`，
-    /// 确保百分比轮播切换时菜单栏项宽度恒定、不左右跳动；前景色固定 `.labelColor`
-    /// （系统默认、无色，自适应深浅），严守「状态栏文字无色」铁律。仅设字体，不改颜色。
-    private func setStatusTitle(_ string: String) {
-        guard let button = statusItem.button else { return }
-        let size = NSFont.menuBarFont(ofSize: 0).pointSize   // 取菜单栏字号
-        let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.labelColor,
-            .expansion: -0.2 as CGFloat   // 横向字距压缩：状态栏项更窄（−10%），字重/字号/字形不变
+    /// 把「SF Symbol 图标 + 等宽数字文字」合成进单张 NSImage（template）。
+    /// 关键点：所有像素在「一张图」内用 AppKit 原生绘制完成（不依赖子 view / layer.contents），
+    /// 因此渲染时只需 `button.image = ...`，绝不会脏化按钮的 layer，避免触发 setNeedsDisplay
+    /// 进入 `_windowNeedsReplicantUpdate` 死循环（触发源 2）。
+    /// 用 `NSImage(size:flipped:drawingHandler:)` 渲染；`isTemplate = true` 由系统按菜单栏分辨率对 alpha 蒙版缩放，保证清晰；
+    /// 颜色纯黑绘制，最终 isTemplate = true，AppKit 只取 alpha 蒙版、用 contentTintColor 自动着色、
+    /// 菜单高亮时自动反色。图标左、文字右、间距 4pt。
+    private func compositeStatusImage(iconName: String, text: String) -> NSImage {
+        let barFont = NSFont.menuBarFont(ofSize: 0)
+        let digitFont = NSFont.monospacedDigitSystemFont(ofSize: barFont.pointSize, weight: .regular)
+        // 状态项按钮高度即菜单栏厚度；图标略小于栏高并垂直居中
+        let barHeight = statusItem.button?.bounds.height ?? 22
+        let iconSize = max(14, min(barHeight - 4, 20))
+        let gap: CGFloat = 4
+        let textAttrs: [NSAttributedString.Key: Any] = [
+            .font: digitFont,
+            .foregroundColor: NSColor.black
         ]
-        button.attributedTitle = NSAttributedString(string: string, attributes: attrs)
+        let textSize = (text as NSString).size(withAttributes: textAttrs)
+        let imageWidth = ceil(iconSize + gap + max(textSize.width, 1))
+        let imageSize = NSSize(width: imageWidth, height: barHeight)
+
+        let image = NSImage(size: imageSize, flipped: false) { _ in
+            // 纯黑绘制即可：最终 isTemplate = true，AppKit 只使用 alpha 作为蒙版，
+            // 用 contentTintColor 自动着色并在菜单高亮时反色。
+            if let symbol = NSImage(systemSymbolName: iconName, accessibilityDescription: nil) {
+                let iconRect = CGRect(x: 0,
+                                      y: (barHeight - iconSize) / 2,
+                                      width: iconSize,
+                                      height: iconSize)
+                symbol.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            }
+            let textX = iconSize + gap
+            let textY = (barHeight - textSize.height) / 2
+            (text as NSString).draw(at: CGPoint(x: textX, y: textY), withAttributes: textAttrs)
+        }
+        image.isTemplate = true
+        return image
     }
 
     /// 状态栏仅显示百分比；文字保持系统默认（无色），仅图标按状态切换（出错→警告三角；陈旧→clock）。
@@ -133,10 +213,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             if agg.total > 0 {
                 let pct = Double(agg.used) / Double(agg.total) * 100
                 displayedPct = Int(pct.rounded())
-                setStatusTitle("\(displayedPct!)%")          // 纯整数百分比，无 Σ 前缀
+                renderStatusItem(text: "\(displayedPct!)%")
                 button.toolTip = "总流量占比 \(displayedPct!)%"
             } else {
-                setStatusTitle("PTM")
+                renderStatusItem(text: "PTM")
                 button.toolTip = nil
             }
         } else if let current = sorted[safe: min(displayIndex, max(0, sorted.count - 1))] {
@@ -145,7 +225,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             if let traffic = current.lastTraffic {
                 let pct = traffic.usagePercentage
                 displayedPct = Int(pct.rounded())
-                setStatusTitle("\(displayedPct!)%")          // 无前导零的整数百分比（如 73% 而非 07%）
+                renderStatusItem(text: "\(displayedPct!)%")
                 if current.lastError != nil {
                     button.toolTip = "\(current.name) · \(String(format: "%.1f%%", pct)) · 上次刷新失败"
                 } else {
@@ -153,18 +233,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 }
             } else if current.lastError != nil {
                 // 无缓存（首拉即失败）：用 — 占位，错误详情放进 tooltip，而非用 ⚠ 文字重复告警
-                setStatusTitle("—")
+                renderStatusItem(text: "—")
                 button.toolTip = current.lastError
             } else {
-                setStatusTitle("PTM")
+                renderStatusItem(text: "PTM")
                 button.toolTip = current.name
             }
         } else {
-            setStatusTitle("PTM")
+            renderStatusItem(text: "PTM")
             button.toolTip = nil
         }
 
-        refreshButtonAppearance()
         updateAccessibilityLabel(hasError: anyError, pct: displayedPct)
     }
 
@@ -173,15 +252,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// - 无错误但数据陈旧（>120 分钟无成功刷新）→ clock.arrow.2.circlepath
     /// - 否则 → network
     private func refreshButtonAppearance() {
-        guard let button = statusItem.button else { return }
-        let anyError = store.subscriptions.contains { $0.lastError != nil }
-        if anyError {
-            button.image = templateImage("exclamationmark.triangle")
-        } else if isDataStale() {
-            button.image = templateImage("clock.arrow.2.circlepath")
-        } else {
-            button.image = templateImage("network")
-        }
+        // 仅更新图标：renderStatusItem 传入 nil iconName 会自动判断状态
+        if let string = lastRenderedString { renderStatusItem(text: string) }
     }
 
     /// 数据是否陈旧：存在「最后成功刷新时间」且距现在已超过 120 分钟（7200s）。
@@ -442,6 +514,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    /// 深浅色模式切换时重新渲染状态栏文字（layer.contents 中的 CGImage 颜色不会自动跟随 appearance）
+    @objc private func handleAppearanceChange() {
+        guard let string = lastRenderedString else { return }
+        renderStatusItem(text: string)
     }
 
     // MARK: - 生命周期
