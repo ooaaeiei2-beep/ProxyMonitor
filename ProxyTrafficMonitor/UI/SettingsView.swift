@@ -113,7 +113,8 @@ struct SettingsView: View {
             }
             cancelEdit()
         } else {
-            Task { await store.add(Subscription(name: newName, url: newURL, resetDay: day)) }
+            let sub = Subscription(name: newName, url: newURL, resetDay: day)
+            Task { await store.add(sub) }
             newName = ""
             newURL = ""
             newResetDay = ""
