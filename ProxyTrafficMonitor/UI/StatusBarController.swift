@@ -472,6 +472,7 @@ private final class RefreshMenuItemView: NSView {
     private let shortcutLabel: NSTextField
     private let spinner: NSProgressIndicator
     private var trackingArea: NSTrackingArea?
+    private var lastActiveState: Bool? = nil
     private var isHovered = false
     private var isPressed = false
 
@@ -516,16 +517,22 @@ private final class RefreshMenuItemView: NSView {
         isHovered || isPressed || (enclosingMenuItem?.isHighlighted ?? false)
     }
 
+    private func updateTextColors() {
+        let active = isActive
+        guard lastActiveState != active else { return }
+        lastActiveState = active
+        titleLabel.textColor = active ? .white : .labelColor
+        shortcutLabel.textColor = active ? .white : .secondaryLabelColor
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        updateTextColors()
         if isActive {
             NSColor.controlAccentColor.setFill()
             let rect = bounds.insetBy(dx: 4, dy: 1)
             NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
         }
         super.draw(dirtyRect)
-        let textColor: NSColor = isActive ? .white : .labelColor
-        titleLabel.textColor = textColor
-        shortcutLabel.textColor = isActive ? .white : .secondaryLabelColor
     }
 
     // MARK: - 鼠标事件（自行消费，菜单不关）
@@ -541,21 +548,25 @@ private final class RefreshMenuItemView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         isHovered = true
+        updateTextColors()
         needsDisplay = true
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
+        updateTextColors()
         needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
         isPressed = true
+        updateTextColors()
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
         isPressed = false
+        updateTextColors()
         needsDisplay = true
         onTap?()
     }
@@ -576,6 +587,7 @@ private final class RefreshMenuItemView: NSView {
             spinner.isHidden = true
         }
         needsDisplay = true
+        lastActiveState = nil
     }
 }
 
