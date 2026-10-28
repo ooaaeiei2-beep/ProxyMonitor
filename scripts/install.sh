@@ -50,8 +50,8 @@ ProxyMonitor 安装脚本
 
 示例:
   bash install.sh                        # 安装最新版到 /Applications
-  bash install.sh -v 1.0.4               # 安装指定版本
-  PTM_BASE_URL=https://mirror.example.com/ptm -v 1.0.4 bash install.sh
+  bash install.sh -v 1.1.0               # 安装指定版本
+  PTM_BASE_URL=https://mirror.example.com/ptm -v 1.1.0 bash install.sh
 EOF
 }
 
