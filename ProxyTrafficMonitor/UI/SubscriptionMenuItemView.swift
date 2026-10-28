@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import SwiftUI
 
 /// 菜单内单个订阅的自定义视图：名称 + 百分比 + 进度条 + 用量详情 + 单订阅刷新按钮 + 刷新中转圈
 final class SubscriptionMenuItemView: NSView {
@@ -15,7 +14,7 @@ final class SubscriptionMenuItemView: NSView {
     private var extraParts: [String] = []  // 重置日 / 到期 / 上次失败（不含「更新于」）
 
     private let padding: CGFloat = 12
-    private let width: CGFloat = 280
+    private let width: CGFloat = MenuMetrics.width
     private let height: CGFloat = 110
     private var contentWidth: CGFloat { width - padding * 2 }
 
@@ -231,48 +230,3 @@ final class SubscriptionMenuItemView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-#if DEBUG
-/// 用 SwiftUI 包装 NSView，使其可在 Xcode Canvas 预览
-struct SubscriptionMenuItemPreview: NSViewRepresentable {
-    let subscription: Subscription
-    func makeNSView(context: Context) -> SubscriptionMenuItemView {
-        SubscriptionMenuItemView(subscription: subscription)
-    }
-    func updateNSView(_ nsView: SubscriptionMenuItemView, context: Context) {}
-}
-
-/// 构造预览用的订阅数据（#Preview body 不能含 var 赋值 + return，抽到 helper）
-private func previewSubscription(name: String, resetDay: Int,
-                                 upload: Int64, download: Int64, total: Int64, expire: Int64,
-                                 lastError: String? = nil) -> Subscription {
-    var sub = Subscription(name: name, resetDay: resetDay)
-    sub.lastTraffic = TrafficInfo(upload: upload, download: download, total: total, expire: expire, fetchedAt: Date())
-    sub.lastError = lastError
-    return sub
-}
-
-#Preview("菜单项 · 92% 红色预警") {
-    SubscriptionMenuItemPreview(subscription: previewSubscription(
-        name: "订阅2 · cocoduck.cc", resetDay: 3,
-        upload: 2_768_312_077, download: 46_639_030_977, total: 53_687_091_200, expire: 1_806_759_842))
-    .frame(width: 280, height: 110)
-    .padding(8)
-}
-
-#Preview("菜单项 · 24.8% 正常") {
-    SubscriptionMenuItemPreview(subscription: previewSubscription(
-        name: "订阅1 · fcapp.run", resetDay: 25,
-        upload: 1_549_406_489, download: 27_259_548_951, total: 115_964_116_992, expire: 1_792_858_862))
-    .frame(width: 280, height: 110)
-    .padding(8)
-}
-
-#Preview("菜单项 · 拉取失败") {
-    SubscriptionMenuItemPreview(subscription: previewSubscription(
-        name: "订阅X · 失效链接", resetDay: 1,
-        upload: 0, download: 0, total: 1, expire: 0,
-        lastError: "网络错误: 似乎已断开与互联网的连接"))
-    .frame(width: 280, height: 110)
-    .padding(8)
-}
-#endif

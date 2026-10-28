@@ -1,19 +1,5 @@
 import AppKit
 import Combine
-import SwiftUI
-
-/// 系统标准菜单单行高度。自定义 view 项的行高必须与之相等，否则与「设置…/退出」等系统文本项对不齐。
-/// 用「3 项菜单高度 − 2 项菜单高度」的差值隔离出单行高度（消除上下边框），自动适配不同 macOS 版本 / 缩放。
-/// 实测当前系统为 24pt（旧版 macOS 多为 22pt）。若测量异常（≤0）回退到 22。
-private let standardMenuRowHeight: CGFloat = {
-    func measure(_ n: Int) -> CGFloat {
-        let m = NSMenu()
-        for _ in 0..<n { m.addItem(NSMenuItem(title: " ", action: nil, keyEquivalent: "")) }
-        return m.size.height
-    }
-    let h = measure(3) - measure(2)
-    return h > 0 ? h : 22
-}()
 
 /// 状态栏控制器：创建 NSStatusItem，构建下拉菜单
 @MainActor
@@ -31,12 +17,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var isMenuOpen = false                    // 菜单是否打开（避免打开时整体重排打断交互）
     private var liveTimer: Timer?                     // 菜单打开时的「更新于」live 计时器
     private var menuItemViews: [SubscriptionMenuItemView] = []  // 当前菜单内的订阅项视图（供 live 计时器 / 实时推送）
-    private var refreshAllItem: NSMenuItem?   // 「立即刷新」项（NSMenuItem 容器，承载自定义 view）
-    private var refreshAllView: RefreshMenuItemView?  // 「立即刷新」自定义 view（点击不关菜单 + 手绘系统级高亮 + ⌘R + 转圈）
+    private var menuRowViews: [MenuRowView] = []                // 当前菜单内的自绘动作行（关闭时清 hover）
+    private var refreshAllItem: NSMenuItem?   // 「立即刷新」项（供结果汇总行定位）
+    private var isRefreshing = false          // 是否有刷新在进行（状态栏图标切到刷新态，菜单收起后仍可见）
 
-    // 刷新结果反馈（选项 B：仅底部汇总行，状态栏与「立即刷新」项标题均不变）
-    private var outcomeBannerItem: NSMenuItem?       // 菜单底部临时汇总行
+    // 刷新结果反馈
+    private var outcomeBannerItem: NSMenuItem?       // 菜单底部临时汇总行（菜单开着时）
     private var outcomeBannerTimer: Timer?           // 汇总行自动移除定时器
+    private var outcomeFlashIcon: String?            // 非 nil 时覆盖状态栏图标（菜单已关闭时）
+    private var outcomeFlashTimer: Timer?            // 闪示到期后恢复图标
 
     // 方向 B：图标 + 文字合成进单张 NSImage（template），只改 button.image 并固定 length，
     // 彻底消除「运行时改 length → WindowServer 几何推送」与「子 layer.contents 重绘」两个死循环触发源。
@@ -68,7 +57,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             }
             .store(in: &cancellables)
 
-        // 刷新状态集合变化 → 驱动菜单内 spinner（「立即刷新」项 + 各订阅项）
+        // 刷新状态集合变化 → 驱动各订阅项行内 spinner，并让状态栏图标进入「刷新中」
         fetcher.$refreshingIDs
             .receive(on: DispatchQueue.main)
             .sink { [weak self] ids in
@@ -76,7 +65,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             }
             .store(in: &cancellables)
 
-        // 刷新结果汇总 → 菜单内瞬时反馈（①「立即刷新」文字 + ② 底部临时汇总行）。状态栏零改动。
+        // 刷新结果汇总 → 菜单底部临时汇总行（菜单已关闭时自然不显示）
         fetcher.$lastOutcome
             .receive(on: DispatchQueue.main)
             .sink { [weak self] outcome in
@@ -135,13 +124,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     ///  - 触发源 2（子 layer 重绘）：不再用 textView 子 view 的 layer.contents 脏化按钮。
     /// 合成图设为 template（isTemplate = true），AppKit 用 contentTintColor（labelColor）自动着色，
     /// 并在菜单高亮时自动反色，与原本 button.image 的图标行为一致、最省心。
-    private func renderStatusItem(text: String, iconName: String? = nil) {
+    private func renderStatusItem(text: String) {
         guard let button = statusItem.button else { return }
 
-        // ---- 确定图标 ----
+        // ---- 确定图标（优先级从高到低）----
         let resolvedIconName: String
-        if let explicit = iconName {
-            resolvedIconName = explicit
+        if let flash = outcomeFlashIcon {
+            // 刷新结果闪示：只在菜单已关闭时出现，2.5s / 4s 后自动恢复
+            resolvedIconName = flash
+        } else if isRefreshing {
+            // 刷新中优先：菜单被手动关掉时，状态栏图标是唯一可见的进度反馈
+            resolvedIconName = "arrow.triangle.2.circlepath"
         } else {
             let anyError = store.subscriptions.contains { $0.lastError != nil }
             if anyError {
@@ -155,10 +148,25 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         // ---- 合成单图（图标 + 文字），只改 button.image ----
         button.image = compositeStatusImage(iconName: resolvedIconName, text: text)
+        #if DEBUG
+        currentIconName = resolvedIconName
+        #endif
 
         // 记录供深浅色切换 / 数据陈旧检查重渲染
         lastRenderedString = text
     }
+
+    /// 合成图缓存：`updateButtonTitle` 会在每次数据变化 / 轮播时被调用，而状态栏文字的取值范围很小
+    /// （百分比 0–100%、"PTM"、"—" 之类），图标只有 4 个。不缓存的话每次都要重新走一遍
+    /// 「SF Symbol 取图 + 文字排版 + 离屏合成」，属于纯重复计算。
+    ///
+    /// 键包含图标名、文字与栏高（栏高决定图像高度与图标尺寸，换屏/换分辨率时会变）。
+    /// 用 `NSCache` 而非字典：内存吃紧时由系统自动回收，回收后下次重新合成即可，无正确性风险。
+    private static let statusImageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 64   // 实际最多约 100 个百分比 × 4 图标，但同屏只会用到极少几个
+        return cache
+    }()
 
     /// 把「SF Symbol 图标 + 等宽数字文字」合成进单张 NSImage（template）。
     /// 关键点：所有像素在「一张图」内用 AppKit 原生绘制完成（不依赖子 view / layer.contents），
@@ -168,10 +176,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// 颜色纯黑绘制，最终 isTemplate = true，AppKit 只取 alpha 蒙版、用 contentTintColor 自动着色、
     /// 菜单高亮时自动反色。图标左、文字右、间距 4pt。
     private func compositeStatusImage(iconName: String, text: String) -> NSImage {
-        let barFont = NSFont.menuBarFont(ofSize: 0)
-        let digitFont = NSFont.monospacedDigitSystemFont(ofSize: barFont.pointSize, weight: .regular)
         // 状态项按钮高度即菜单栏厚度；图标略小于栏高并垂直居中
         let barHeight = statusItem.button?.bounds.height ?? 22
+        let cacheKey = "\(iconName)|\(text)|\(Int(barHeight.rounded()))" as NSString
+        if let cached = Self.statusImageCache.object(forKey: cacheKey) { return cached }
+
+        let barFont = NSFont.menuBarFont(ofSize: 0)
+        let digitFont = NSFont.monospacedDigitSystemFont(ofSize: barFont.pointSize, weight: .regular)
         let iconSize = max(14, min(barHeight - 4, 20))
         let gap: CGFloat = 4
         let textAttrs: [NSAttributedString.Key: Any] = [
@@ -198,6 +209,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             return true
         }
         image.isTemplate = true
+        Self.statusImageCache.setObject(image, forKey: cacheKey)
         return image
     }
 
@@ -253,7 +265,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// - 无错误但数据陈旧（>120 分钟无成功刷新）→ clock.arrow.2.circlepath
     /// - 否则 → network
     private func refreshButtonAppearance() {
-        // 仅更新图标：renderStatusItem 传入 nil iconName 会自动判断状态
+        // 仅更新图标：renderStatusItem 会按「闪示 > 刷新中 > 错误 > 陈旧 > 正常」重新判断
         if let string = lastRenderedString { renderStatusItem(text: string) }
     }
 
@@ -344,8 +356,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func rebuildMenu() {
         menuItemViews.removeAll()
+        menuRowViews.removeAll()
         refreshAllItem = nil
-        refreshAllView = nil
         outcomeBannerItem = nil
         outcomeBannerTimer?.invalidate()
         outcomeBannerTimer = nil
@@ -383,35 +395,52 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // 「立即刷新」用自定义 view（选项 A）：点击在 view 内部消费事件 → 菜单不关（与订阅行刷新按钮一致）；
-        // 手绘与系统完全一致的选中高亮（controlAccentColor 圆角块 + 白字）+ 右侧 ⌘R；刷新中转圈。
-        // 同时保留 keyEquivalent=⌘R（键盘 ⌘R 仍触发 refresh），并设 action/target 供键盘路径调用。
-        let refreshView = RefreshMenuItemView(title: "立即刷新", shortcut: "⌘R") { [weak self] in
-            self?.refresh()
+        // 以下三行与订阅行一样全部自绘（MenuRowView）：
+        // `item.view != nil` 时 AppKit 整行不画，所以菜单里**没有任何系统绘制的文字**，
+        // 颜色/字形/基线由同一套代码产出，结构性一致，不存在"某一行差一档"。
+        // 附带好处：view 项不会因点击而收起菜单，「立即刷新」点完菜单留在原地，
+        // 可以看着两行同时转圈、结束后就地显示结果。
+        // keyEquivalent 仍然挂在 NSMenuItem 上（菜单层匹配，与 view 无关），⌘R / ⌘, / ⌘Q 照常可用。
+        refreshAllItem = addRow(to: menu, title: "立即刷新", shortcut: "R", action: #selector(refresh)) {
+            [weak self] in self?.refresh()
         }
-        let refreshItem = NSMenuItem()
-        refreshItem.view = refreshView
-        refreshItem.isEnabled = true
-        refreshItem.keyEquivalent = "r"
-        refreshItem.keyEquivalentModifierMask = .command
-        refreshItem.action = #selector(refresh)
-        refreshItem.target = self
-        refreshAllItem = refreshItem
-        refreshAllView = refreshView
-        menu.addItem(refreshItem)
 
-        let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
+        // 「设置…」带齿轮图标（与系统菜单一致）
+        addRow(to: menu, title: "设置…", shortcut: ",", hasIcon: true, action: #selector(openSettings)) {
+            [weak self] in self?.closeMenuThenOpenSettings()
+        }
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
+        addRow(to: menu, title: "退出", shortcut: "Q", action: #selector(quit)) {
+            NSApp.terminate(nil)
+        }
 
         statusItem.menu = menu
         updateButtonTitle()
+
+        #if DEBUG
+        MenuCalibration.runIfRequested(statusItem: statusItem, menu: menu)
+        MenuCalibration.runFlashCheckIfRequested(statusItem: statusItem)
+        #endif
+    }
+
+    /// 添加一行自绘菜单项：同时挂上 keyEquivalent（菜单层匹配，与 view 无关，⌘ 键照常生效）。
+    /// 抽出来是为了让「标题 / 快捷键 / selector / 点击回调」四处不会各自漂移。
+    @discardableResult
+    private func addRow(to menu: NSMenu,
+                        title: String,
+                        shortcut: String,
+                        hasIcon: Bool = false,
+                        action: Selector,
+                        onActivate: @escaping () -> Void) -> NSMenuItem {
+        let row = MenuRowView(title: title, shortcut: shortcut, hasIcon: hasIcon, onActivate: onActivate)
+        menuRowViews.append(row)
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: shortcut.lowercased())
+        item.target = self
+        item.view = row
+        menu.addItem(item)
+        return item
     }
 
     /// 菜单打开时，把 store 中的最新数据推送到各菜单项视图（就地更新内容，不重排菜单）
@@ -423,32 +452,89 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// 根据刷新中的 id 集合，驱动各行订阅项的 spinner 与「立即刷新」项自身（选项 A：自定义 view，菜单不关）
+    /// 根据刷新中的 id 集合，驱动各行订阅项的 spinner；
+    /// 同时让状态栏图标进入「刷新中」——菜单被手动关掉时，这是唯一可见的进度反馈。
     private func applySpinnerState(_ ids: Set<UUID>) {
         for view in menuItemViews {
             view.setRefreshing(ids.contains(view.subscriptionId))
         }
-        refreshAllView?.setRefreshing(ids.contains(fetcher.allRefreshSentinel))
+        let busy = !ids.isEmpty
+        guard busy != isRefreshing else { return }
+        isRefreshing = busy
+        if busy { clearOutcomeFlash() }   // 新一轮刷新开始，上一次的结果闪示立刻让位给进度图标
+        updateButtonTitle()
     }
 
-    // MARK: - 刷新结果反馈（状态栏不动，仅菜单内）
+    // MARK: - 刷新结果反馈
 
-    /// 全部刷新结束后：①「立即刷新」项文字瞬时反馈；② 菜单底部临时汇总行。
+    #if DEBUG
+    /// 当前实际绘制的状态栏图标（仅供标定断言；也便于排查「图标为什么不换」）
+    private var currentIconName: String?
+
+    /// 仅供 MenuCalibration 断言：菜单开合态与「结果闪示」是否真的点亮
+    var debugIsMenuOpen: Bool { isMenuOpen }
+    var debugOutcomeFlashIcon: String? { outcomeFlashIcon }
+    var debugCurrentIconName: String? { currentIconName }
+    var debugStore: SubscriptionStore { store }
+
+    /// 仅供 MenuCalibration：验证合成图缓存既命中、又不串号
+    func debugCacheCheck() -> String {
+        let a = compositeStatusImage(iconName: "network", text: "5%")
+        let b = compositeStatusImage(iconName: "network", text: "5%")     // 同键 → 必须复用
+        let c = compositeStatusImage(iconName: "network", text: "100%")   // 换文字 → 必须换图
+        let d = compositeStatusImage(iconName: "exclamationmark.triangle", text: "5%")  // 换图标 → 必须换图
+        return "sameHit=\(a === b) diffText=\(a !== c) diffIcon=\(a !== d) "
+             + "w5=\(Int(a.size.width)) w100=\(Int(c.size.width))"
+    }
+    #endif
+
+    /// 全部刷新结束后按菜单状态选反馈通道：
+    ///  - 菜单开着 → 底部临时汇总行（可见、不打断交互）
+    ///  - 菜单已关闭 → 状态栏图标闪示（否则用户点完刷新就按 Esc、或定时刷新在后台完成时，结果会被完全丢弃）
     private func presentRefreshOutcome(_ outcome: TrafficFetcher.RefreshOutcome) {
         guard outcome.total > 0 else { return }
-        let title = outcome.failures == 0
+        let success = outcome.failures == 0
+        let title = success
             ? "✓ 刷新完成"
             : "⚠ \(outcome.failures)/\(outcome.total) 刷新失败"
 
-        // 结果仅通过菜单底部临时汇总行反馈（选项 B：「立即刷新」项标题不变）
-        showOutcomeBanner(title: title)
+        if isMenuOpen {
+            showOutcomeBanner(title: title)
+        } else {
+            flashOutcome(success: success)
+        }
+    }
+
+    /// 状态栏图标短暂切换为刷新结果，然后自动恢复。
+    /// 只换图标不换文字：状态项长度是固定的（按 "100%" 预留），往文字里塞 ✓ 会溢出。
+    private func flashOutcome(success: Bool) {
+        clearOutcomeFlash()
+        outcomeFlashIcon = success ? "checkmark.circle" : "exclamationmark.triangle"
+        if let string = lastRenderedString { renderStatusItem(text: string) }
+
+        // 失败留更久：这是需要用户注意的信息，成功只是「做完了」的确认
+        let timer = Timer(timeInterval: success ? 2.5 : 4.0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.clearOutcomeFlash() }
+        }
+        outcomeFlashTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func clearOutcomeFlash() {
+        outcomeFlashTimer?.invalidate()
+        outcomeFlashTimer = nil
+        guard outcomeFlashIcon != nil else { return }
+        outcomeFlashIcon = nil
+        if let string = lastRenderedString { renderStatusItem(text: string) }
     }
 
     private func showOutcomeBanner(title: String) {
         removeOutcomeBanner()
         guard isMenuOpen, let menu = statusItem.menu, let refreshItem = refreshAllItem else { return }
 
-        let banner = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        // 也用自绘行：菜单里已经没有系统绘制的行，混一个原生 item 进去会立刻显出渲染差异
+        let banner = NSMenuItem()
+        banner.view = MenuRowView(title: title, style: .info)
         banner.isEnabled = false   // 信息行，不可点击
         if let idx = menu.items.firstIndex(of: refreshItem) {
             menu.insertItem(banner, at: idx + 1)   // 紧贴「立即刷新」下方
@@ -479,10 +565,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         refreshMenuTimes()
     }
 
+    /// 系统菜单的「当前高亮项」变化（鼠标悬停 / 键盘 ↑↓ 都会触发）。
+    /// 自绘行不会被 AppKit 画高亮，所以借这个回调驱动我们自己的高亮，
+    /// 顺便让键盘导航重新有视觉反馈。这是自绘行**唯一**的 hover 入口（详见 `MenuRowView.setHovered`）。
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        let highlighted = item?.view as? MenuRowView
+        for row in menuRowViews {
+            row.setHovered(row === highlighted)
+        }
+    }
+
     func menuDidClose(_ menu: NSMenu) {
         isMenuOpen = false
         stopLiveTimer()
         removeOutcomeBanner()   // 关闭菜单时清掉临时汇总行
+        for row in menuRowViews { row.clearHover() }   // 清残留 hover 高亮
     }
 
     /// 菜单打开时启动「更新于」live 计时器（.common 模式）
@@ -507,6 +604,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func refresh() {
         fetcher.refresh(manual: true)
+    }
+
+    /// 自绘行不会因点击而收起菜单，所以「点了就走」的动作必须自己关菜单再执行。
+    /// 先 cancelTracking 再异步执行，避免在菜单跟踪循环内部弹窗导致焦点错乱。
+    private func closeMenuThenOpenSettings() {
+        statusItem.menu?.cancelTracking()
+        DispatchQueue.main.async { [weak self] in
+            self?.openSettings()
+        }
     }
 
     @objc private func openSettings() {
@@ -540,145 +646,24 @@ private extension Collection {
     }
 }
 
-/// 菜单「立即刷新」项自定义视图（选项 A）：
-/// - 点击在 view 内部消费事件（mouseUp: 自行处理）→ 菜单不关（与订阅行刷新按钮一致；依据 SO#7880646：自定义 view 处理 mouseUp 后事件不再上传菜单项）。
-/// - 手绘与系统完全一致的选中高亮：controlAccentColor 圆角块（左右内缩 4 / 上下 1，圆角 5）+ 白字 + 右侧 ⌘R（secondaryLabelColor）。
-/// - 刷新中显示「刷新中…」+ 转圈 spinner（菜单打开期间也转，用 perform(inModes:[.common]) 启动）。
-private final class RefreshMenuItemView: NSView {
-    var onTap: (() -> Void)?
-
-    private let titleLabel: NSTextField
-    private let shortcutLabel: NSTextField
-    private let spinner: NSProgressIndicator
-    private var trackingArea: NSTrackingArea?
-    private var lastActiveState: Bool? = nil
-    private var isHovered = false
-    private var isPressed = false
-
-    init(title: String, shortcut: String, onTap: @escaping () -> Void) {
-        self.onTap = onTap
-
-        titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 13)
-        titleLabel.textColor = .labelColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.isBordered = false
-        titleLabel.drawsBackground = false
-        titleLabel.backgroundColor = .clear
-
-        shortcutLabel = NSTextField(labelWithString: shortcut)
-        shortcutLabel.font = .systemFont(ofSize: 13)
-        shortcutLabel.textColor = .secondaryLabelColor
-        shortcutLabel.alignment = .right
-        shortcutLabel.isBordered = false
-        shortcutLabel.drawsBackground = false
-        shortcutLabel.backgroundColor = .clear
-
-        spinner = NSProgressIndicator()
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-        spinner.isHidden = true
-
-        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: standardMenuRowHeight))
-        addSubview(titleLabel)
-        addSubview(shortcutLabel)
-        addSubview(spinner)
-        titleLabel.frame = NSRect(x: 12, y: 4, width: 210, height: 16)
-        shortcutLabel.frame = NSRect(x: 234, y: 4, width: 36, height: 16)
-        spinner.frame = NSRect(x: 254, y: 4, width: 16, height: 16)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    // MARK: - 选中态判定（鼠标 hover / 按下 / 键盘方向键选中 都算激活）
-    private var isActive: Bool {
-        isHovered || isPressed || (enclosingMenuItem?.isHighlighted ?? false)
-    }
-
-    private func updateTextColors() {
-        let active = isActive
-        guard lastActiveState != active else { return }
-        lastActiveState = active
-        titleLabel.textColor = active ? .white : .labelColor
-        shortcutLabel.textColor = active ? .white : .secondaryLabelColor
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        updateTextColors()
-        if isActive {
-            NSColor.controlAccentColor.setFill()
-            let rect = bounds.insetBy(dx: 4, dy: 1)
-            NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
-        }
-        super.draw(dirtyRect)
-    }
-
-    // MARK: - 鼠标事件（自行消费，菜单不关）
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let area = trackingArea { removeTrackingArea(area) }
-        let area = NSTrackingArea(rect: bounds,
-                                  options: [.mouseEnteredAndExited, .activeAlways],
-                                  owner: self, userInfo: nil)
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        updateTextColors()
-        needsDisplay = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        updateTextColors()
-        needsDisplay = true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        isPressed = true
-        updateTextColors()
-        needsDisplay = true
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        isPressed = false
-        updateTextColors()
-        needsDisplay = true
-        onTap?()
-    }
-
-    // MARK: - 刷新中转圈
-    func setRefreshing(_ refreshing: Bool) {
-        if refreshing {
-            titleLabel.stringValue = "刷新中…"
-            shortcutLabel.isHidden = true
-            spinner.isHidden = false
-            spinner.perform(#selector(NSProgressIndicator.startAnimation(_:)),
-                           with: nil, afterDelay: 0, inModes: [.common])
-        } else {
-            titleLabel.stringValue = "立即刷新"
-            shortcutLabel.isHidden = false
-            spinner.perform(#selector(NSProgressIndicator.stopAnimation(_:)),
-                           with: nil, afterDelay: 0, inModes: [.common])
-            spinner.isHidden = true
-        }
-        needsDisplay = true
-        lastActiveState = nil
-    }
-}
-
 /// 菜单顶部「共 N 个订阅 · 总剩余 X」汇总项的自定义视图：纯文字（labelColor，与订阅项同色），
-/// 不实现 hover 高亮 —— 自定义 view 项系统不会自动画选中高亮，从而 hover 时与下方订阅项一致、不变蓝。
+/// 不实现 hover 高亮 —— 它是信息行、点击无行为，不该给出"可点"的暗示。
+///
+/// 字号与缩进必须和 `MenuRowView` 的动作行完全一致（13pt 菜单字体、x = `MenuMetrics.titleX`、
+/// 同一套 `textTop` / `textHeight`）：两处若各写一套字面量，一旦只改一边，视觉上就会出现
+/// 「上下没对齐 / 字号差半档」的问题，而这正是之前踩过的坑。
 private final class SummaryMenuItemView: NSView {
     init(text: String) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: standardMenuRowHeight))
+        super.init(frame: NSRect(x: 0, y: 0, width: MenuMetrics.width, height: MenuMetrics.rowHeight))
         let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.font = NSFont.menuFont(ofSize: 0)   // 13pt，与动作行同一字体
         label.textColor = .labelColor
-        label.frame = NSRect(x: 12, y: 4, width: 256, height: 16)
+        label.lineBreakMode = .byTruncatingTail
+        let x = MenuMetrics.titleX
+        label.frame = NSRect(x: x,
+                             y: MenuMetrics.textTop,
+                             width: MenuMetrics.width - x - 12,
+                             height: MenuMetrics.textHeight)
         addSubview(label)
     }
 

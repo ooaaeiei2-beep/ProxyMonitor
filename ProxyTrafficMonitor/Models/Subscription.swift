@@ -9,12 +9,21 @@ struct Subscription: Codable, Identifiable, Equatable {
     var resetDay: Int?              // 人工配置的重置日（1-31）
     var inferredResetDay: Int?      // 程序推断的重置日（辅助校验）
     var lastTraffic: TrafficInfo?   // 最近一次拉取结果
-    var lastError: String?          // 最近一次拉取错误（瞬态，不持久化）
+    var lastError: String?          // 最近一次拉取的展示文本（瞬态，不持久化，可能含敏感信息）
+    /// 最近一次失败的分类代码（持久化）。只存枚举化的短代码，不存原始错误文本，
+    /// 因为 URLError 的 localizedDescription 可能带完整订阅 URL（含 token）。
+    var lastErrorCode: String?
+    /// 最近一次失败的时间（持久化）。重启后仍能看出"上次就失败了"，而不是一片空白。
+    var lastErrorAt: Date?
+    /// 最近一次成功拉取的时间（持久化，按订阅独立记录）。
+    /// 陈旧判定与「上次成功：x 分钟前」都基于它，不能再依赖全局且不落盘的状态。
+    var lastSuccessfulFetchAt: Date?
     var history: [TrafficRecord]    // 每日快照，用于推断重置日
 
     enum CodingKeys: String, CodingKey {
-        // 注意：url（走 Keychain）与 lastError（瞬态）不进入 UserDefaults
+        // 注意：url 走 Keychain，lastError 为瞬态展示文本，二者都不进入 UserDefaults
         case id, name, userAgent, resetDay, inferredResetDay, lastTraffic, history
+        case lastErrorCode, lastErrorAt, lastSuccessfulFetchAt
     }
 
     init(name: String,
@@ -29,6 +38,9 @@ struct Subscription: Codable, Identifiable, Equatable {
         self.inferredResetDay = nil
         self.lastTraffic = nil
         self.lastError = nil
+        self.lastErrorCode = nil
+        self.lastErrorAt = nil
+        self.lastSuccessfulFetchAt = nil
         self.history = []
     }
 
@@ -44,6 +56,9 @@ struct Subscription: Codable, Identifiable, Equatable {
         self.lastTraffic = try c.decodeIfPresent(TrafficInfo.self, forKey: .lastTraffic)
         self.history = try c.decodeIfPresent([TrafficRecord].self, forKey: .history) ?? []
         self.lastError = nil                // 瞬态，不持久化
+        self.lastErrorCode = try c.decodeIfPresent(String.self, forKey: .lastErrorCode)
+        self.lastErrorAt = try c.decodeIfPresent(Date.self, forKey: .lastErrorAt)
+        self.lastSuccessfulFetchAt = try c.decodeIfPresent(Date.self, forKey: .lastSuccessfulFetchAt)
     }
 
     /// 有效重置日：优先人工配置，其次程序推断

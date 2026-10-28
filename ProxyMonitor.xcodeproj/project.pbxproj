@@ -21,9 +21,11 @@
 		8C614B1DE355A0E4BE6A4645 /* TrafficProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA6B438274C21ABF00BD36E /* TrafficProvider.swift */; };
 		8D6F5460BF24011B2E2172B3 /* ByteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0445AB561C37C19BF7C79C70 /* ByteFormatter.swift */; };
 		912F5B78B6E2046842CCD82C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1554D56154787737F7946D8 /* main.swift */; };
-		BDFE50E778E74AF42076D314 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F202E4F9596DB35B00EF8CBE /* SettingsView.swift */; };
+		BDFE50E778E74AF42076D314 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F202E4F9596DB35B00EF8CBE /* SettingsWindow.swift */; };
 		C463FA7B6ACAA80D6E533C50 /* ResetDayInferrer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A8A92FFB13CA2AB698008B /* ResetDayInferrer.swift */; };
 		C9896BA94ADC71260067CFEA /* SubscriptionMenuItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C23DA01E844190DCE0F6F0 /* SubscriptionMenuItemView.swift */; };
+		AA11BB22CC33DD44EE55FF02 /* MenuRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF01 /* MenuRowView.swift */; };
+		AA11BB22CC33DD44EE55FF04 /* MenuCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF03 /* MenuCalibration.swift */; };
 		CA3AB55899D380ADC277A6DE /* Subscription.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75C8427CAAA649F5EA34C4A5 /* Subscription.swift */; };
 		D1663A3B085EEDCA069E6AC6 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 868C76F96E0DCE29FC84CA2B /* NotificationService.swift */; };
 		D730B2CE0CFD541A0A4C96B2 /* TrafficInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 520B4DDC58A533B4469AF824 /* TrafficInfo.swift */; };
@@ -47,13 +49,15 @@
 		98A8A92FFB13CA2AB698008B /* ResetDayInferrer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetDayInferrer.swift; sourceTree = "<group>"; };
 		AEB06B2A360E185F96B3BDA1 /* SubscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionStore.swift; sourceTree = "<group>"; };
 		B1C23DA01E844190DCE0F6F0 /* SubscriptionMenuItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionMenuItemView.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF01 /* MenuRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuRowView.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF03 /* MenuCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuCalibration.swift; sourceTree = "<group>"; };
 		B9325EFA9461F50E53534271 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		C03BFC881566691C4E64D456 /* PTMLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTMLogger.swift; sourceTree = "<group>"; };
 		D29CC87429E7390B8C5C4EE7 /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
 		D8905DCF09C15E01B462ACDA /* TrafficFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrafficFetcher.swift; sourceTree = "<group>"; };
 		E1554D56154787737F7946D8 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		F1A05CED497CC4457700EAE1 /* LaunchAtLoginManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginManager.swift; sourceTree = "<group>"; };
-		F202E4F9596DB35B00EF8CBE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F202E4F9596DB35B00EF8CBE /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -113,8 +117,9 @@
 		8A49A896E9CC294C07192C0E /* UI */ = {
 			isa = PBXGroup;
 			children = (
-				F202E4F9596DB35B00EF8CBE /* SettingsView.swift */,
+				F202E4F9596DB35B00EF8CBE /* SettingsWindow.swift */,
 				D29CC87429E7390B8C5C4EE7 /* StatusBarController.swift */,
+				AA11BB22CC33DD44EE55FF01 /* MenuRowView.swift */,
 				B1C23DA01E844190DCE0F6F0 /* SubscriptionMenuItemView.swift */,
 			);
 			path = UI;
@@ -124,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				7FA4794E813F727541B4DE1A /* AppDelegate.swift */,
+				AA11BB22CC33DD44EE55FF03 /* MenuCalibration.swift */,
 				43CFFCFECCBBD23E5102864F /* Info.plist */,
 				E1554D56154787737F7946D8 /* main.swift */,
 			);
@@ -236,10 +242,12 @@
 				D1663A3B085EEDCA069E6AC6 /* NotificationService.swift in Sources */,
 				0BE560EB30BD87561ECF638F /* PTMLogger.swift in Sources */,
 				C463FA7B6ACAA80D6E533C50 /* ResetDayInferrer.swift in Sources */,
-				BDFE50E778E74AF42076D314 /* SettingsView.swift in Sources */,
+				BDFE50E778E74AF42076D314 /* SettingsWindow.swift in Sources */,
 				7C71CEC6EC464D50F1E38F23 /* StatusBarController.swift in Sources */,
 				CA3AB55899D380ADC277A6DE /* Subscription.swift in Sources */,
 				C9896BA94ADC71260067CFEA /* SubscriptionMenuItemView.swift in Sources */,
+				AA11BB22CC33DD44EE55FF02 /* MenuRowView.swift in Sources */,
+				AA11BB22CC33DD44EE55FF04 /* MenuCalibration.swift in Sources */,
 				420C2F50234F4BF7B2087559 /* SubscriptionProvider.swift in Sources */,
 				7453594598A1A422E2793812 /* SubscriptionStore.swift in Sources */,
 				5817F57F981771D0B1147588 /* TrafficFetcher.swift in Sources */,

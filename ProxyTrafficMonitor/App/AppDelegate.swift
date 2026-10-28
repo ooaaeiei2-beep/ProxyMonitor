@@ -7,7 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var wakeRefreshTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        PTMLogger.info("app 启动")
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        PTMLogger.info("app 启动（v\(version) build \(build)，\(ProcessInfo.processInfo.operatingSystemVersionString)）")
 
         let provider = SubscriptionProvider()
         let store = SubscriptionStore()
@@ -26,21 +29,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fetcher.start()
         }
 
-        // 系统唤醒后延迟 5 分钟再刷新（休眠期间定时器不触发，避免数据陈旧；
-        // 用 Task 延迟 + 去重，避免多次唤醒叠加多个刷新）
+        // 系统唤醒后补一次刷新：睡眠期间调度器不会触发，这段窗口是必然丢失的。
+        // 延迟 10 秒而非 5 分钟——只给 Wi-Fi 重连留时间；过长的延迟本身也会被 App Nap 再次推迟。
+        // 用 Task 延迟 + 去重，避免多次唤醒叠加多个刷新。
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            guard self?.wakeRefreshTask == nil else {
-                PTMLogger.info("系统唤醒，已有待执行的延迟刷新，跳过")
+            guard let self else { return }
+            guard self.wakeRefreshTask == nil else {
+                PTMLogger.info("系统唤醒，已有待执行的刷新，跳过")
                 return
             }
-            PTMLogger.info("系统唤醒，5 分钟后刷新数据")
-            self?.wakeRefreshTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
+            PTMLogger.info("系统唤醒，10 秒后刷新数据")
+            self.wakeRefreshTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
                 self?.wakeRefreshTask = nil
-                await self?.fetcher?.refresh()
+                await self?.fetcher?.handleWake()
             }
         }
 

@@ -15,9 +15,12 @@ final class SubscriptionStore: ObservableObject {
     @Published var displayMode: DisplayMode = .max {
         didSet { defaults.set(displayMode.rawValue, forKey: "displayMode.v1") }
     }
-    /// 最近一次「成功」拉取完成的时间。状态栏据此判断数据是否陈旧（>10 分钟无成功刷新 → clock 图标）。
-    /// 在 `updateTraffic`（所有成功路径的唯一入口）中赋值，覆盖真实与 Mock 拉取。
-    @Published private(set) var lastSuccessfulFetchAt: Date?
+    /// 全局视角的「最近一次成功拉取时间」：取所有订阅中最新的一个。
+    /// 数据源已下沉到 `Subscription.lastSuccessfulFetchAt`（按订阅独立、且持久化），
+    /// 这里保留为派生属性，仅为兼容状态栏现有的陈旧判定逻辑（后续按订阅细化）。
+    var lastSuccessfulFetchAt: Date? {
+        subscriptions.compactMap(\.lastSuccessfulFetchAt).max()
+    }
 
     /// Keychain 写入失败提示（订阅链接未保存成功）。UI 层观察此属性弹 Alert（修复 #4）。
     /// 即使 Keychain 失败，其余配置字段仍会 `save()` 到 UserDefaults，仅 url 会缺失——文案已说明。
@@ -175,15 +178,22 @@ final class SubscriptionStore: ObservableObject {
         save()
     }
 
-    /// 记录最近一次拉取错误（瞬态，不影响持久化）
-    func setError(id: UUID, message: String) {
+    /// 记录最近一次拉取失败。
+    /// 展示文本只留在内存；落盘的是分类代码与时间戳——原始错误文本可能带订阅 URL（含 token）。
+    func setError(id: UUID, message: String, code: String) {
         guard let index = subscriptions.firstIndex(where: { $0.id == id }) else { return }
         subscriptions[index].lastError = message
+        subscriptions[index].lastErrorCode = code
+        subscriptions[index].lastErrorAt = Date()
+        save()
     }
 
     func clearError(id: UUID) {
         guard let index = subscriptions.firstIndex(where: { $0.id == id }) else { return }
         subscriptions[index].lastError = nil
+        subscriptions[index].lastErrorCode = nil
+        subscriptions[index].lastErrorAt = nil
+        save()
     }
 
     /// 拉取后更新流量与每日快照（同一天覆盖，仅保留近 60 天）
@@ -191,7 +201,9 @@ final class SubscriptionStore: ObservableObject {
         guard let index = subscriptions.firstIndex(where: { $0.id == id }) else { return }
         subscriptions[index].lastTraffic = traffic
         subscriptions[index].lastError = nil   // 成功即清除错误
-        lastSuccessfulFetchAt = Date()         // 记录成功刷新时间（数据陈旧判定用）
+        subscriptions[index].lastErrorCode = nil
+        subscriptions[index].lastErrorAt = nil
+        subscriptions[index].lastSuccessfulFetchAt = Date()   // 按订阅记录，随下方 save() 一起落盘
 
         let today = calendar.startOfDay(for: Date())
         subscriptions[index].history.removeAll { calendar.isDate($0.date, inSameDayAs: today) }
@@ -211,6 +223,11 @@ final class SubscriptionStore: ObservableObject {
     private func save() {
         // 仅持久化除 url 外的字段到 UserDefaults（CodingKeys 已排除 url）。
         // url 存于 Keychain，只在 add/update/remove 时同步（见上方 async 方法），避免每次流量更新都重写 Keychain。
+        #if DEBUG
+        // Mock 模式下**绝不落盘**：Mock 数据与真实订阅共用同一个 UserDefaults 域，
+        // 一旦 save() 被触发（拉取成功后的 updateTraffic 就会触发），真实订阅列表会被 Mock 覆盖且不可恢复。
+        guard !Self.isMockMode else { return }
+        #endif
         if let data = try? JSONEncoder().encode(subscriptions) {
             defaults.set(data, forKey: key)
         }
