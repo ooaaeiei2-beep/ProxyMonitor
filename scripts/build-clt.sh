@@ -108,6 +108,18 @@ if ! iconutil --convert icns --output "$APP/Contents/Resources/AppIcon.icns" "$I
     rm -f "$APP/Contents/Resources/AppIcon.icns"
 fi
 
+# 隐私清单必须落在 .app/Contents/Resources/ 根下，名字固定 PrivacyInfo.xcprivacy。
+# 手写 .app 没有 Copy Bundle Resources 阶段，只能手动拷。
+echo "==> 拷贝隐私清单"
+if [ -f "$SRC/PrivacyInfo.xcprivacy" ]; then
+    cp "$SRC/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/PrivacyInfo.xcprivacy"
+    plutil -lint "$APP/Contents/Resources/PrivacyInfo.xcprivacy" >/dev/null \
+        || { echo "    错误：PrivacyInfo.xcprivacy 格式非法" >&2; exit 1; }
+else
+    echo "    错误：缺少 $SRC/PrivacyInfo.xcprivacy" >&2
+    exit 1
+fi
+
 echo "==> 生成 Info.plist"
 python3 - "$SRC/App/Info.plist" "$APP/Contents/Info.plist" \
     "$BUNDLE_ID" "$VERSION" "$BUILD_NUMBER" "$MIN_MACOS" <<'PY'
@@ -139,6 +151,22 @@ print(f"    bundle id = {bundle_id} | 版本 = {version} ({build_number})")
 PY
 
 # ---------------------------------------------------------------- 签名
+
+# 产物自检：手写 .app 没有 Xcode 的阶段校验，任何一步静默失败都会产出
+# 一个「能签名、能打开、但 Info.plist 缺失」的坏包。这里硬性拦住。
+echo "==> 产物自检"
+for required in "Contents/Info.plist" "Contents/MacOS/ProxyMonitor" "Contents/Resources/PrivacyInfo.xcprivacy"; do
+    if [ ! -s "$APP/$required" ]; then
+        echo "    错误：产物缺少 $required" >&2
+        exit 1
+    fi
+done
+BUILT_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null)"
+if [ "$BUILT_VERSION" != "$VERSION" ]; then
+    echo "    错误：Info.plist 版本为「$BUILT_VERSION」，期望「$VERSION」" >&2
+    exit 1
+fi
+echo "    Info.plist / 可执行文件 / 隐私清单 齐备，版本 $BUILT_VERSION"
 
 echo "==> adhoc 签名"
 codesign --force --sign - --options runtime "$APP" 2>&1 | sed 's/^/    /'
