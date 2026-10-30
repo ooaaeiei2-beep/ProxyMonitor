@@ -5,11 +5,12 @@
 #   ./scripts/capture-shots.sh              # 输出到 docs/shots/
 #   ./scripts/capture-shots.sh /tmp/shots   # 指定输出目录
 #
-# 前置：先构建 debug 版（release 版没有调试开关）
+# 前置：必须先构建 debug 版。release 版没有 -DDEBUG，下面的调试开关是空操作，
+# 跑起来会毫无输出地退出。
 #   ./scripts/build-clt.sh --debug
 #
-# 注意：运行前请退出正在运行的 ProxyMonitor。两个实例会同时占用状态栏，
-# 抓图可能抓到空菜单或重复图标。
+# 必须在有图形会话的终端里运行（Terminal.app / iTerm）。通过 ssh 或后台任务
+# 运行时应用不是激活状态，菜单不会真的展开，标定工具会记下 menuOpen=false。
 set -eu
 
 OUT=${1:-docs/shots}
@@ -26,34 +27,42 @@ say() { printf '%s\n' "$*" >&2; }
 
 if pgrep -x ProxyMonitor >/dev/null 2>&1; then
   say "ProxyMonitor 正在运行。请先从菜单栏退出它再跑这个脚本，"
-  say "否则状态栏会有两个实例，抓图可能不正确。"
+  say "否则状态栏会出现两个实例，抓图可能不正确。"
   exit 1
 fi
 
 mkdir -p "$OUT"
+OUT_ABS=$(cd "$OUT" && pwd)
 
-# capture <输出文件名> [额外环境变量...]
+# capture <输出文件名> [额外 PTM_* 变量...]
 capture() {
   name=$1
   shift
-  rm -f "$OUT/ptm_menu.png"
+
+  rm -f "$OUT_ABS/ptm_menu.png" "$OUT_ABS/ptm_frames.txt"
 
   env PTM_USE_MOCK=1 \
       PTM_CALIBRATE_MENU=1 \
       PTM_CALIBRATE_SNAPSHOT=1 \
-      PTM_CALIBRATE_OUT="$OUT" \
+      PTM_CALIBRATE_OUT="$OUT_ABS" \
       PTM_CALIBRATE_DELAY=1.5 \
       PTM_CALIBRATE_SETTLE=1.0 \
       "$@" \
-      "$BIN"
+      "$BIN" || true
 
-  if [ -f "$OUT/ptm_menu.png" ]; then
-    mv "$OUT/ptm_menu.png" "$OUT/$name"
+  if [ -f "$OUT_ABS/ptm_menu.png" ]; then
+    mv "$OUT_ABS/ptm_menu.png" "$OUT_ABS/$name"
     say "  ✓ $OUT/$name"
-  else
-    say "  ✗ $OUT/$name 未生成（菜单窗口未捕获到）"
-    return 1
+    return 0
   fi
+
+  say "  ✗ $OUT/$name 未生成"
+  if [ -f "$OUT_ABS/ptm_frames.txt" ]; then
+    say "    标定输出："
+    sed 's/^/      /' "$OUT_ABS/ptm_frames.txt" >&2
+    say "    若为 menuOpen=false，说明应用没能激活菜单，请确认在有图形界面的终端里运行。"
+  fi
+  return 1
 }
 
 say "渲染菜单面板…"
@@ -63,7 +72,7 @@ say "渲染悬停态…"
 capture menu-hover.png PTM_CALIBRATE_HOVER=1
 
 say ""
-say "完成。还需手动截一张设置窗口："
+say "完成。还需手动截一张设置窗口（没有对应的快照开关）："
 say "  1. 菜单栏图标 → 设置…（⌘,）"
 say "  2. ⌘⇧4 后按空格，点设置窗口"
 say "  3. 存为 $OUT/settings.png"
