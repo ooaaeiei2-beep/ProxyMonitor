@@ -1,8 +1,18 @@
 # ProxyMonitor
 
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)](https://github.com/ooaaeiei2-beep/ProxyMonitor/releases/latest)
+[![Release](https://img.shields.io/github/v/release/ooaaeiei2-beep/ProxyMonitor)](https://github.com/ooaaeiei2-beep/ProxyMonitor/releases/latest)
+[![License](https://img.shields.io/github/license/ooaaeiei2-beep/ProxyMonitor)](LICENSE)
+
 macOS 菜单栏的代理订阅流量监视器。常驻状态栏显示已用百分比，鼠标一点即可看各订阅明细、手动刷新、调整设置。
 
 不代理流量、不改系统网络配置，只做一件事：定期读取订阅链接返回的 `Subscription-Userinfo` 响应头，把「已用 / 总量」算成百分比放到菜单栏上。
+
+## 为什么做这个
+
+订阅多了以后，查用量是件麻烦事：每家后台都要单独登录，有的还要过验证码；想知道「这个月还剩多少」得逐个点进去看；等发现快用完时，通常已经超了。
+
+`Subscription-Userinfo` 本来就把用量写在响应头里——拉订阅时顺手读一下，就能一直知道。这个应用做的就是这件事，并把结果压缩成状态栏上的一两个字符。
 
 ## 功能
 
@@ -17,6 +27,15 @@ macOS 菜单栏的代理订阅流量监视器。常驻状态栏显示已用百�
 - **用量与到期提醒**：用量到 80% / 95%、套餐剩 7 天 / 1 天、月度重置前 1 天各提醒一次。通知按事件去重并持久化，重启不会重复打扰
 - **登录时启动**（可选）
 
+## 数据与隐私
+
+订阅链接里带着 token，所以这块是设计时优先考虑的：
+
+- **订阅链接（含 token）只存钥匙串**，service 为 `com.xushuda.proxytrafficmonitor`，account 为 `url.<订阅 UUID>`；不写入 UserDefaults，也不写日志
+- **其余配置与历史**存于 UserDefaults 域 `com.xushuda.proxymonitor`
+- **日志**在 `~/Library/Logs/ProxyMonitor/proxymonitor.log`，按大小轮转。失败只记录分类代码与时间戳，不记录原始错误文本（`URLError` 的描述可能含完整订阅 URL）
+- **不做任何数据上报**，无第三方 SDK，无分析埋点。见 `ProxyTrafficMonitor/PrivacyInfo.xcprivacy`
+
 ## 系统要求
 
 - macOS 13.0 或更高
@@ -24,14 +43,28 @@ macOS 菜单栏的代理订阅流量监视器。常驻状态栏显示已用百�
 
 ## 安装
 
-### 用安装脚本（推荐）
+### 下载 DMG（推荐）
+
+从 [Releases](https://github.com/ooaaeiei2-beep/ProxyMonitor/releases/latest) 下载 `ProxyMonitor-<版本>.dmg`，挂载后把 `ProxyMonitor.app` 拖进 `/Applications`。
+
+> 应用使用 adhoc 签名、未经 Apple 公证。若通过浏览器下载，首次打开会被 Gatekeeper 拦截，提示「无法验证开发者」或「已损坏」——**这不是文件坏了**，本项目没有 Apple 开发者账号（$99/年）。
+>
+> 任选其一即可正常打开：
+>
+> 1. 在「应用程序」里**右键点 ProxyMonitor → 打开**，弹窗里再点一次「打开」
+> 2. 或执行 `xattr -dr com.apple.quarantine /Applications/ProxyMonitor.app`
+>
+> 用下面的安装脚本装不会带 quarantine 属性，因此没有这个提示。
+
+### 用安装脚本
+
+脚本会确定版本 → 下载 DMG → 用 `SHA256SUMS.txt` 校验完整性（不一致直接拒绝）→ 退出旧版本 → 备份到 `~/Library/Application Support/ProxyMonitor/backups/` → 安装到 `/Applications` → 打开。
 
 ```bash
 curl -fsSL https://github.com/ooaaeiei2-beep/ProxyMonitor/releases/latest/download/install.sh -o install.sh
+less install.sh          # 建议先看一眼再执行
 bash install.sh
 ```
-
-脚本会确定版本 → 下载 DMG → 用 `SHA256SUMS.txt` 校验完整性（不一致直接拒绝）→ 退出旧版本 → 备份到 `~/Library/Application Support/ProxyMonitor/backups/` → 安装到 `/Applications` → 打开。
 
 常用选项：
 
@@ -43,12 +76,6 @@ bash install.sh --help                          # 全部选项
 ```
 
 国内直连 GitHub 的 Release 资源（`objects.githubusercontent.com`）常出现 TLS 握手超时。脚本在直连失败时会自动探测本地常见代理端口（7897 / 7890 / 6152 / 1087 / 8080 / 8888）并重试一次；也可用 `--proxy` 显式指定，或用 `PTM_BASE_URL` 指向镜像。
-
-### 手动安装
-
-从 [Releases](https://github.com/ooaaeiei2-beep/ProxyMonitor/releases) 下载 `ProxyMonitor-<版本>.dmg`，挂载后把 `ProxyMonitor.app` 拖进 `/Applications`。
-
-> 应用使用 adhoc 签名、未经 Apple 公证。若通过浏览器下载，首次打开会被 Gatekeeper 拦截，需在「系统设置 → 隐私与安全性」中点「仍要打开」，或对 `.app` 执行 `xattr -dr com.apple.quarantine`。用上面的 `curl` + 脚本方式安装不会带 quarantine 属性，因此没有这个提示。
 
 ## 使用
 
@@ -75,12 +102,16 @@ bash install.sh --help                          # 全部选项
 
 图标右侧的文字只有三种取值：`N%`（百分比）、`PTM`（尚未取到数据）、`—`（首次拉取即失败，无缓存可显示）。
 
-## 数据与隐私
+## 常见问题
 
-- **订阅链接（含 token）只存钥匙串**，service 为 `com.xushuda.proxytrafficmonitor`，account 为 `url.<订阅 UUID>`；不写入 UserDefaults，也不写日志
-- **其余配置与历史**存于 UserDefaults 域 `com.xushuda.proxymonitor`
-- **日志**在 `~/Library/Logs/ProxyMonitor/proxymonitor.log`，按大小轮转。失败只记录分类代码与时间戳，不记录原始错误文本（`URLError` 的描述可能含完整订阅 URL）
-- **不做任何数据上报**，无第三方 SDK，无分析埋点。见 `ProxyTrafficMonitor/PrivacyInfo.xcprivacy`
+**为什么不直接看服务商后台？**
+可以，但每家都要单独登录，而且你通常不会天天去。这个应用的意义是把「还剩多少」变成不需要主动查询的信息。
+
+**会不会拖慢系统？**
+只在定时刷新时发起一次 HTTPS 请求，读一个响应头就结束。不代理流量，不常驻网络连接。
+
+**订阅源不返回 `Subscription-Userinfo` 头怎么办？**
+用不了。这是唯一的数据来源，没有降级方案。
 
 ## 从源码构建
 
