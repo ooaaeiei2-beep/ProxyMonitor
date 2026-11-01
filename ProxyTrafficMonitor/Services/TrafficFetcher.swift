@@ -253,6 +253,7 @@ final class TrafficFetcher: ObservableObject {
             switch providerError {
             case .invalidURL:                   return "invalid_url"
             case .noSubscriptionUserinfoHeader: return "missing_header"
+            case .httpStatus(let code):         return "http_\(code)"
             case .parseFailed:                  return "parse_failed"
             case .networkError:                 return "network"
             }

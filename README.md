@@ -73,7 +73,7 @@ bash install.sh
 常用选项：
 
 ```bash
-bash install.sh -v 1.1.0                        # 指定版本
+bash install.sh -v 1.1.1                        # 指定版本
 bash install.sh --proxy http://127.0.0.1:7897   # 指定下载代理
 bash install.sh --no-open                       # 装完不自动打开
 bash install.sh --help                          # 全部选项
@@ -117,6 +117,9 @@ bash install.sh --help                          # 全部选项
 
 **会不会拖慢系统？**
 只在定时刷新时发起一次 HTTPS 请求，读一个响应头就结束。不代理流量，不常驻网络连接。
+
+**拉取偶尔失败怎么办？**
+会自动重试一次。单次请求超时 12 秒；超时、连接中断、5xx 或 429 会等待 1.5 秒后重试，系统唤醒后网络尚未就绪则等待 4 秒后重试。仍失败才记为失败，等下个刷新周期。4xx（429 除外，如 401/403）属于链接或 UA 配置问题，不重试。
 
 **订阅源不返回 `Subscription-Userinfo` 头怎么办？**
 用不了。这是唯一的数据来源，没有降级方案。
