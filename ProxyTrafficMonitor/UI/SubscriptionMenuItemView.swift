@@ -18,6 +18,13 @@ final class SubscriptionMenuItemView: NSView {
     private let height: CGFloat = 110
     private var contentWidth: CGFloat { width - padding * 2 }
 
+    /// 刷新按钮边长（与系统菜单图标同尺寸），spinner 与它共用同一位置
+    private let refreshSize: CGFloat = 16
+    /// 百分比标签右边缘与刷新按钮左边缘的净距，防止字形视觉粘连
+    private let pctButtonGap: CGFloat = 6
+    /// 百分比标签右边缘锚点：固定它，间距才不会随文本长度变化
+    private var pctRightEdge: CGFloat { width - padding - refreshSize - pctButtonGap }
+
     private var nameLabel: NSTextField!
     private var pctLabel: NSTextField!
     private var track: NSView!
@@ -40,13 +47,14 @@ final class SubscriptionMenuItemView: NSView {
         nameLabel = NSTextField(labelWithString: subscription.name)
         nameLabel.font = .systemFont(ofSize: 13, weight: .medium)
         nameLabel.textColor = .labelColor
-        nameLabel.frame = NSRect(x: padding, y: height - 24, width: contentWidth - 76, height: 16)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.frame = .zero   // 由 relayoutHeader() 按百分比实际宽度确定
 
         pctLabel = NSTextField(labelWithString: "—")
         pctLabel.font = .systemFont(ofSize: 12, weight: .medium)
         pctLabel.alignment = .right
         pctLabel.textColor = .labelColor
-        pctLabel.frame = NSRect(x: width - padding - 56, y: height - 24, width: 40, height: 16)
+        pctLabel.frame = .zero   // 由 relayoutHeader() 按文本实际宽度确定
 
         track = NSView(frame: NSRect(x: padding, y: height - 42, width: contentWidth, height: 6))
         track.wantsLayer = true
@@ -68,7 +76,7 @@ final class SubscriptionMenuItemView: NSView {
         trendLabel.lineBreakMode = .byTruncatingTail
         trendLabel.frame = NSRect(x: padding, y: 6, width: contentWidth, height: 22)
 
-        refreshBtn = NSButton(frame: NSRect(x: width - padding - 16, y: height - 22, width: 16, height: 16))
+        refreshBtn = NSButton(frame: NSRect(x: width - padding - refreshSize, y: height - 22, width: refreshSize, height: refreshSize))
         refreshBtn.bezelStyle = .regularSquare
         refreshBtn.isBordered = false
         refreshBtn.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "刷新此订阅")
@@ -78,7 +86,7 @@ final class SubscriptionMenuItemView: NSView {
         refreshBtn.action = #selector(didTapRefresh)
         refreshBtn.toolTip = "刷新此订阅"
 
-        spinner = NSProgressIndicator(frame: NSRect(x: width - padding - 16, y: height - 22, width: 16, height: 16))
+        spinner = NSProgressIndicator(frame: NSRect(x: width - padding - refreshSize, y: height - 22, width: refreshSize, height: refreshSize))
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
@@ -93,13 +101,31 @@ final class SubscriptionMenuItemView: NSView {
         addSubview(spinner)
     }
 
+    /// 按百分比文本的实际宽度重排顶部两个标签。
+    /// 右边缘锚在 pctRightEdge（与刷新按钮恒定留 pctButtonGap），名称标签让出等宽空间并可截断，
+    /// 因此 5 字符（43.9%）、6 字符（100.0%）乃至超量值（7 字符）都不会互相挤压。
+    private func relayoutHeader() {
+        let fitted = pctLabel.attributedStringValue.size().width
+        let pctWidth = min(max(ceil(fitted) + 2, 16), contentWidth * 0.4)
+        pctLabel.frame = NSRect(x: pctRightEdge - pctWidth,
+                                y: height - 24,
+                                width: pctWidth,
+                                height: 16)
+        let nameWidth = max(40, pctLabel.frame.minX - 8 - padding)
+        nameLabel.frame = NSRect(x: padding, y: height - 24, width: nameWidth, height: 16)
+    }
+
     /// 根据当前 subscription / traffic 重算所有文案与进度条
     private func render() {
         nameLabel.stringValue = subscription.name
         let pct = traffic?.usagePercentage ?? 0
+        // 百分比文本先定稿再统一重排，避免各分支漏排导致重叠
+        pctLabel.stringValue = traffic == nil
+            ? (subscription.lastError != nil ? "⚠" : "—")
+            : String(format: "%.1f%%", pct)
+        relayoutHeader()
 
         guard let traffic = traffic else {
-            pctLabel.stringValue = subscription.lastError != nil ? "⚠" : "—"
             track.layer?.backgroundColor = NSColor.separatorColor.cgColor
             fill.frame = .zero
             detailLabel.stringValue = subscription.lastError != nil
@@ -109,8 +135,9 @@ final class SubscriptionMenuItemView: NSView {
             return
         }
 
-        pctLabel.stringValue = String(format: "%.1f%%", pct)
-        fill.frame = NSRect(x: 0, y: 0, width: max(2, contentWidth * CGFloat(pct / 100)), height: 6)
+        // 超量时 pct > 100，夹到 100% 防止填充超出轨道右边界（丢圆角、溢出到菜单边缘）
+        let ratio = min(max(pct, 0), 100) / 100
+        fill.frame = NSRect(x: 0, y: 0, width: max(2, contentWidth * CGFloat(ratio)), height: 6)
         // 仅 ≥90% 进度条染红；其余中性灰（文字始终无色）
         let barColor: NSColor = (pct >= 90) ? .systemRed : .tertiaryLabelColor
         fill.layer?.backgroundColor = barColor.cgColor
