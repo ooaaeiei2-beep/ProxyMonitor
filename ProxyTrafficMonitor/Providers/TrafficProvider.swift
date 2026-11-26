@@ -2,7 +2,8 @@ import Foundation
 
 /// 流量数据源协议。订阅链接与官网面板各做一个实现，便于扩展。
 protocol TrafficProvider {
-    func fetchTraffic(for subscription: Subscription) async throws -> TrafficInfo
+    /// - Parameter extendedRetry: 唤醒恢复期等网络未就绪场景，重试窗口统一加长（见 SubscriptionProvider）。
+    func fetchTraffic(for subscription: Subscription, extendedRetry: Bool) async throws -> TrafficInfo
 }
 
 enum TrafficProviderError: LocalizedError {

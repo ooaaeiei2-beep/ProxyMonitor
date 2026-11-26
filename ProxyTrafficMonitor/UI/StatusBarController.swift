@@ -603,7 +603,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func refresh() {
-        fetcher.refresh(manual: true)
+        fetcher.refresh(trigger: .manual)
     }
 
     /// 自绘行不会因点击而收起菜单，所以「点了就走」的动作必须自己关菜单再执行。

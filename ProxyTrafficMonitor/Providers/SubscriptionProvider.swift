@@ -23,10 +23,10 @@ final class SubscriptionProvider: TrafficProvider {
     private static let retryCount = 1
     /// 重试前的等待（纳秒）。
     ///
-    /// 分两档：超时类抖动等 1.5s 即可；`notConnectedToInternet` 多见于系统唤醒后
-    /// Wi-Fi 尚未完成关联，需要更长窗口（实测唤醒到网络可用常在 3~8s）。
+    /// 分两档：常规链路抖动等 1.5s 即可；唤醒恢复期 / 断网类错误用 4s 长窗口
+    /// （实测唤醒到网络可用常在 3~8s，短窗口会在 Wi-Fi 关联完成前就重试）。
     private static let retryDelayNanos: UInt64 = 1_500_000_000
-    private static let offlineRetryDelayNanos: UInt64 = 4_000_000_000
+    private static let extendedRetryDelayNanos: UInt64 = 4_000_000_000
 
     init(session: URLSession = .shared) {
         let config = URLSessionConfiguration.default
@@ -45,7 +45,7 @@ final class SubscriptionProvider: TrafficProvider {
         self.session = URLSession(configuration: config)
     }
 
-    func fetchTraffic(for subscription: Subscription) async throws -> TrafficInfo {
+    func fetchTraffic(for subscription: Subscription, extendedRetry: Bool) async throws -> TrafficInfo {
         guard let url = URL(string: subscription.url) else {
             throw TrafficProviderError.invalidURL
         }
@@ -54,7 +54,7 @@ final class SubscriptionProvider: TrafficProvider {
         for attempt in 0...Self.retryCount {
             if attempt > 0, let lastError {
                 // 用 try 而非 try?：任务被取消时立即上抛，不再发出第二次请求。
-                try await Task.sleep(nanoseconds: Self.retryDelay(for: lastError))
+                try await Task.sleep(nanoseconds: Self.retryDelay(for: lastError, extendedRetry: extendedRetry))
             }
             do {
                 return try await fetchOnce(url: url, subscription: subscription)
@@ -115,20 +115,25 @@ final class SubscriptionProvider: TrafficProvider {
         }
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {
-        // notConnectedToInternet 纳入重试：系统唤醒后 Wi-Fi 尚未关联时首轮必失败，
-        // 配合 offlineRetryDelayNanos 的长窗口可在同一刷新周期内补回，不必等 20 分钟。
+        // 链路类瞬时故障纳入重试：
+        //  - notConnectedToInternet / cannotConnectToHost：唤醒后 Wi-Fi 尚未关联，首轮常失败；
+        //  - secureConnectionFailed(-1200)：网络栈 TLS 未就绪时高发，重试通常即恢复。
+        // 实测近 30 天唤醒刷新中 -1200 出现 21 次，原判为确定性错误直接放弃，是「刷新没生效」主因。
         case .timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
-             .notConnectedToInternet:
+             .notConnectedToInternet, .secureConnectionFailed:
             return true
         default:
             return false
         }
     }
 
-    /// 按错误类型选择重试等待时长。
-    private static func retryDelay(for error: Error) -> UInt64 {
+    /// 按错误类型与场景选择重试等待时长。
+    /// 唤醒恢复期（extendedRetry）统一用 4s 长窗口：此时 -1009/-1200/-1004 同源，
+    /// 都是网络栈未就绪，1.5s 太短会在 Wi-Fi 关联完成前就重试掉。
+    private static func retryDelay(for error: Error, extendedRetry: Bool) -> UInt64 {
+        if extendedRetry { return extendedRetryDelayNanos }
         if let urlError = error as? URLError, urlError.code == .notConnectedToInternet {
-            return offlineRetryDelayNanos
+            return extendedRetryDelayNanos
         }
         return retryDelayNanos
     }

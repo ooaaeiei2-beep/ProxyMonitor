@@ -1,6 +1,14 @@
 import Foundation
 import Combine
 
+/// 刷新触发来源。写入日志用于事后区分唤醒补刷 / 定时 / 手动，并派生重试策略。
+enum RefreshTrigger: String {
+    case startup   = "启动"
+    case scheduled = "定时"
+    case wake      = "唤醒"
+    case manual    = "手动"
+}
+
 /// 定时拉取订阅流量。启动即拉一次，之后每 20~30 分钟（随机间隔，避免固定节奏）。
 ///
 /// 调度使用 `NSBackgroundActivityScheduler` 而非 `Timer`：
@@ -48,7 +56,7 @@ final class TrafficFetcher: ObservableObject {
 
     func start() {
         PTMLogger.info("启动定时拉取")
-        refresh()
+        refresh(trigger: .startup)
         scheduleNext()
     }
 
@@ -64,16 +72,16 @@ final class TrafficFetcher: ObservableObject {
     func handleWake() {
         PTMLogger.info("系统唤醒：重排调度并立即刷新")
         scheduleNext()
-        refresh()
+        refresh(trigger: .wake)
     }
 
     /// 立即刷新所有订阅。并行拉取，每个订阅各自独立开始/结束，菜单内每行可独立显示转圈。
-    func refresh(manual: Bool = false) {
+    func refresh(trigger: RefreshTrigger = .scheduled) {
         // 实测 NSBackgroundActivityScheduler 在短间隔下可能出现同一秒内的连续触发，
         // 用最小间隔兜住，避免重复拉取。手动刷新不受限制。
-        if !manual, let last = lastRefreshAttemptAt,
+        if trigger != .manual, let last = lastRefreshAttemptAt,
            Date().timeIntervalSince(last) < 60 {
-            PTMLogger.debug("距上次刷新不足 60s，跳过本次触发")
+            PTMLogger.debug("距上次刷新不足 60s，跳过本次触发（trigger=\(trigger.rawValue)）")
             return
         }
         guard beginRefresh(allRefreshID) else { return }
@@ -87,8 +95,10 @@ final class TrafficFetcher: ObservableObject {
         lastError = nil
         let startedAt = Date()
         beginActivityShield()
-        PTMLogger.info("全部刷新开始（订阅数=\(snapshot.count)，触发=\(manual ? "手动" : "定时")）")
+        PTMLogger.info("全部刷新开始（订阅数=\(snapshot.count)，触发=\(trigger.rawValue)）")
 
+        // 唤醒恢复期网络栈未就绪概率高，重试窗口统一加长到 4s（其余场景沿用分档策略）
+        let extendedRetry = (trigger == .wake)
         Task {
             var failureCount = 0
             // 并行拉取所有订阅；跳过正在进行中的单订阅，避免重复拉取。
@@ -97,7 +107,7 @@ final class TrafficFetcher: ObservableObject {
             for subscription in snapshot where !activeRefreshes.contains(subscription.id) {
                 group.addTask {
                     _ = await self.beginRefresh(subscription.id)
-                    let ok = await self.fetchOne(subscription)
+                    let ok = await self.fetchOne(subscription, extendedRetry: extendedRetry)
                     await self.endRefresh(subscription.id)
                     return (subscription.id, ok)
                 }
@@ -140,14 +150,14 @@ final class TrafficFetcher: ObservableObject {
         refreshingIDs = activeRefreshes
     }
 
-    private func fetchOne(_ subscription: Subscription) async -> Bool {
+    private func fetchOne(_ subscription: Subscription, extendedRetry: Bool = false) async -> Bool {
         #if DEBUG
         if SubscriptionStore.isMockMode {
             return await fetchOneMock(subscription)
         }
         #endif
         do {
-            let traffic = try await provider.fetchTraffic(for: subscription)
+            let traffic = try await provider.fetchTraffic(for: subscription, extendedRetry: extendedRetry)
             store.updateTraffic(id: subscription.id, traffic: traffic)
             if let updated = store.subscriptions.first(where: { $0.id == subscription.id }) {
                 inferrer.observe(subscriptionId: subscription.id, traffic: traffic, store: store)
@@ -217,7 +227,7 @@ final class TrafficFetcher: ObservableObject {
 
         scheduler.schedule { [weak self] completion in
             Task { @MainActor [weak self] in
-                self?.refresh()
+                self?.refresh(trigger: .scheduled)
                 completion(.finished)
             }
         }
